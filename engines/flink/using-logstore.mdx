@@ -1,0 +1,175 @@
+---
+title: "Using LogStore"
+description: "Configure Kafka or Pulsar as a LogStore to enable low-latency streaming reads from Mixed-format tables."
+---
+
+Traditional data lake architectures store data in files (HDFS, S3, etc.) and provide batch-level visibility into new data. When real-time business needs require sub-second or minute-level data freshness, file-based architectures introduce unacceptable latency.
+
+Amoro addresses this with an optional **LogStore** layer. When LogStore is enabled on a table, Amoro's Flink connector writes data simultaneously to both the FileStore and an external message queue (Kafka or Pulsar). Downstream consumers can read from the LogStore with very low latency without waiting for file snapshots to materialize, while still having access to the full historical data in the FileStore — all through a single table abstraction.
+
+The `log-store.enabled` table property controls this behavior.
+
+---
+
+## What LogStore provides
+
+<CardGroup cols={2}>
+  <Card title="Sub-second latency" icon="bolt">
+    Consumers reading from LogStore see new data within milliseconds of the write, compared to minutes for file-based snapshots.
+  </Card>
+  <Card title="Single table abstraction" icon="table">
+    Readers and writers interact with one Amoro table. Amoro routes reads to LogStore or FileStore based on the `mixed-format.read.mode` hint.
+  </Card>
+  <Card title="Eventual consistency" icon="check">
+    LogStore and FileStore are written simultaneously via double-write without Kafka transactions, avoiding the multi-minute delays that transactional Kafka producers introduce.
+  </Card>
+  <Card title="Unified watermark" icon="clock">
+    Amoro aligns watermarks across LogStore and FileStore reads so streaming pipelines can reason about event time consistently.
+  </Card>
+</CardGroup>
+
+---
+
+## Supported backends and versions
+
+| Flink version | Kafka | Pulsar |
+|---------------|-------|--------|
+| Flink 1.18    | Supported | — |
+| Flink 1.19    | Supported | — |
+
+Kafka versions compatible with the Amoro LogStore connector:
+
+| Flink version | Compatible Kafka versions |
+|---------------|---------------------------|
+| 1.18.x        | 0.10.2.\*, 0.11.\*, 1.\*, 2.\*, 3.\* |
+| 1.19.x        | 0.10.2.\*, 0.11.\*, 1.\*, 2.\*, 3.\* |
+
+---
+
+## Enabling LogStore on a table
+
+LogStore must be enabled at table creation time. Two options are available:
+
+<Tabs>
+  <Tab title="Amoro dashboard (SQL terminal)">
+
+```sql
+CREATE TABLE db.log_table (
+    id   INT,
+    name STRING,
+    ts   TIMESTAMP,
+    PRIMARY KEY (id)
+) USING mixed_iceberg
+TBLPROPERTIES (
+    'log-store.enabled' = 'true',
+    'log-store.topic'   = 'topic_log_test',
+    'log-store.address' = 'localhost:9092'
+);
+```
+
+  </Tab>
+  <Tab title="Flink SQL Client">
+
+```sql
+-- Switch to the mixed-format catalog first:
+-- USE CATALOG <catalog_name>;
+
+CREATE TABLE db.log_table (
+    id   INT,
+    name STRING,
+    ts   TIMESTAMP,
+    PRIMARY KEY (id) NOT ENFORCED
+) WITH (
+    'log-store.enabled' = 'true',
+    'log-store.topic'   = 'topic_log_test',
+    'log-store.address' = 'localhost:9092'
+);
+```
+
+  </Tab>
+</Tabs>
+
+For all available LogStore configuration options, see the [LogStore configurations reference](/user-guides/configurations#logstore-configurations).
+
+---
+
+## Double-write: LogStore and FileStore
+
+When LogStore is enabled, the Amoro Flink connector writes to both Kafka/Pulsar (LogStore) and the ChangeStore (FileStore) in a single write path. No Kafka transactions are opened, which avoids the minutes of latency that transactional producers introduce.
+
+```sql
+INSERT INTO db.log_table /*+ OPTIONS('mixed-format.emit.mode'='log') */
+SELECT id, name, ts FROM sourceTable;
+```
+
+<Note>
+Only the Apache Flink engine implements dual-write LogStore and FileStore. Other engines (Spark, Trino) write to FileStore only.
+</Note>
+
+The `mixed-format.emit.mode` hint controls which stores receive data:
+
+| Value | Behavior |
+|-------|----------|
+| `file` | Write to FileStore only. |
+| `log` | Write to LogStore only. |
+| `file,log` | Write to both FileStore and LogStore. |
+| `auto` | Write to FileStore only when LogStore is disabled. Write to both when LogStore is enabled. **Recommended.** |
+
+---
+
+## Reading from LogStore
+
+To direct a streaming read to the LogStore rather than the FileStore, set the `mixed-format.read.mode` hint option:
+
+```sql
+SET execution.runtime-mode = streaming;
+SET table.dynamic-table-options.enabled = true;
+
+SELECT * FROM db.log_table
+    /*+ OPTIONS('mixed-format.read.mode'='log', 'properties.group.id'='my-consumer-group') */;
+```
+
+Supported read options:
+
+| Key | Default | Type | Required | Description |
+|-----|---------|------|----------|-------------|
+| `mixed-format.read.mode` | `file` | String | No | `file` or `log`. Set to `log` to read from LogStore. |
+| `scan.startup.mode` | `latest` | String | No | `earliest`, `latest`, `timestamp`, `group-offsets`, `specific-offsets`. |
+| `scan.startup.timestamp-millis` | (none) | Long | No | Start timestamp in ms. Required when `scan.startup.mode=timestamp`. |
+| `scan.startup.specific-offsets` | (none) | String | No | Per-partition offsets, e.g. `partition:0,offset:42;partition:1,offset:300`. |
+| `properties.group.id` | (none) | String | Required for Kafka | Kafka consumer group ID. |
+| `properties.pulsar.admin.adminUrl` | (none) | String | Required for Pulsar | Pulsar admin HTTP URL, e.g. `http://my-broker.example.com:8080`. |
+| `log.consumer.changelog.modes` | `all-kinds` | String | No | `all-kinds`: reads `+I/-D/-U/+U` CDC events. `append-only`: reads inserts only. |
+| `properties.*` | (none) | String | No | Pass-through Kafka consumer or Pulsar client settings, e.g. `properties.batch.size=16384`. |
+
+---
+
+## Reading from FileStore
+
+When `mixed-format.read.mode=file` (the default), reads go to the FileStore. This provides full historical data with merge-on-read semantics for primary key tables, but snapshot materialization latency applies.
+
+```sql
+SET execution.runtime-mode = streaming;
+SET table.dynamic-table-options.enabled = true;
+
+-- Read incremental file-based changes
+SELECT * FROM db.log_table /*+ OPTIONS('mixed-format.read.mode'='file', 'monitor-interval'='10s') */;
+```
+
+---
+
+## Watermark alignment
+
+When a Flink task reads from LogStore and the number of Kafka/Pulsar topic partitions is fewer than the task parallelism, some Flink subtasks will be idle. Idle subtasks do not advance the watermark, which can stall event-time processing.
+
+Configure the idle source timeout to allow the watermark to progress past idle subtasks:
+
+```sql
+SET table.exec.source.idle-timeout = 30s;
+```
+
+See the [Flink idle timeout documentation](https://nightlies.apache.org/flink/flink-docs-release-1.18/docs/dev/table/config/#table-exec-source-idle-timeout) for details.
+
+<Warning>
+When `log-store.type=pulsar`, the Flink task parallelism must be at least equal to the number of Pulsar topic partitions. If parallelism exceeds the partition count, configure `table.exec.source.idle-timeout` to avoid watermark stalls.
+</Warning>

@@ -1,80 +1,156 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: "Quick Start"
+description: "Get Amoro running and create your first managed table."
+keywords: ["amoro", "quickstart", "AMS", "installation", "deployment", "getting started"]
 ---
 
-## Get started in three steps
+This guide walks you through downloading Amoro, starting the Amoro Management Service (AMS), and creating your first catalog and table using the Dashboard.
 
-Get your documentation site running locally and make your first customization.
+## Prerequisites
 
-### Step 1: Set up your local environment
+- **Java 11** is required. Verify your installation:
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+```bash
+java -version
+```
 
-### Step 2: Deploy your changes
+## Steps
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+<Steps>
+  <Step title="Download and extract">
+    Download the latest release package from the [Apache Amoro download page](https://amoro.apache.org/download/).
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+    ```bash
+    tar -xzf apache-amoro-x.y.z-bin.tar.gz
+    cd amoro-x.y.z
+    ```
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+    Replace `x.y.z` with the actual release version.
+  </Step>
 
-### Step 3: Go live
+  <Step title="Review the configuration">
+    The default configuration at `conf/config.yaml` is ready to use out of the box for local development. It starts AMS with an embedded Derby database and binds all services to localhost.
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+    ```yaml
+    ams:
+      admin-username: admin
+      admin-password: admin
+      server-bind-host: "0.0.0.0"
+      server-expose-host: "127.0.0.1"
+
+      thrift-server:
+        table-service:
+          bind-port: 1260   # Compute engines connect here
+        optimizing-service:
+          bind-port: 1261   # Optimizers connect here
+
+      http-server:
+        bind-port: 1630     # Dashboard and REST API
+
+      database:
+        type: derby
+        jdbc-driver-class: org.apache.derby.jdbc.EmbeddedDriver
+        url: jdbc:derby:/tmp/amoro/derby;create=true
+    ```
+
+    <Note>
+      The default configuration uses an embedded Apache Derby database stored at `/tmp/amoro/derby`. Derby is suitable for local development and evaluation, but is not recommended for production use.
+    </Note>
+
+    <Tip>
+      For production deployments, switch to MySQL or PostgreSQL by updating the `database` section in `conf/config.yaml`. Create an empty database schema first — AMS creates all tables automatically on first start.
+
+      ```yaml
+      ams:
+        database:
+          type: mysql
+          jdbc-driver-class: com.mysql.cj.jdbc.Driver
+          url: jdbc:mysql://127.0.0.1:3306/amoro?useUnicode=true&characterEncoding=UTF8&autoReconnect=true&useAffectedRows=true&allowPublicKeyRetrieval=true&useSSL=false
+          username: root
+          password: root
+          auto-create-tables: true
+      ```
+
+      See [Deployment](/admin-guides/deployment) for full production configuration guidance.
+    </Tip>
+  </Step>
+
+  <Step title="Start AMS">
+    Run the startup script from the Amoro installation directory:
+
+    ```bash
+    bin/ams.sh start
+    ```
+
+    To restart or stop AMS:
+
+    ```bash
+    bin/ams.sh restart
+    bin/ams.sh stop
+    ```
+  </Step>
+
+  <Step title="Log in to the Dashboard">
+    Open [http://localhost:1630](http://localhost:1630) in a browser. You should see the AMS login page.
+
+    Log in with the default credentials:
+
+    | Field | Value |
+    |-------|-------|
+    | Username | `admin` |
+    | Password | `admin` |
+
+    <Warning>
+      Change the default admin password before exposing AMS to any network. Update `ams.admin-password` in `conf/config.yaml` and restart AMS.
+    </Warning>
+  </Step>
+
+  <Step title="Create a catalog">
+    In the Dashboard, navigate to **Catalogs** in the left sidebar and click **Create Catalog**.
+
+    You will be prompted to configure:
+
+    - **Name** — A unique identifier for the catalog (e.g., `my_catalog`).
+    - **Metastore** — The metadata backend. Choose from Hive Metastore, Hadoop, or AWS Glue.
+    - **Table format** — The default table format for this catalog: Iceberg, Mixed-Iceberg, Mixed-Hive, or Paimon.
+    - **Storage** — File system configuration (HDFS, S3, OSS, etc.) and credentials.
+
+    After saving, the catalog appears in the catalog list and is available to connected compute engines.
+
+    For detailed catalog configuration options, see [Managing Catalogs](/admin-guides/managing-catalogs).
+  </Step>
+
+  <Step title="Create your first table">
+    With a catalog created, open the **Terminal** in the Dashboard. Navigate to **Terminal** in the left sidebar and run:
+
+    ```sql
+    CREATE DATABASE IF NOT EXISTS my_db;
+
+    CREATE TABLE my_catalog.my_db.my_table (
+      id BIGINT,
+      name STRING,
+      ts TIMESTAMP
+    ) USING iceberg
+    PARTITIONED BY (days(ts));
+    ```
+
+    After creation, the table appears under **Tables** in the Dashboard, where you can view its schema, snapshots, files, and self-optimizing status.
+  </Step>
+</Steps>
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Catalogs" icon="folder-tree" href="/concepts/catalogs">
+    Learn how multi-catalog design enables federated queries across data sources.
+  </Card>
+  <Card title="Self-Optimizing" icon="arrows-rotate" href="/concepts/self-optimizing">
+    Understand how AMS continuously compacts files and manages table health.
+  </Card>
+  <Card title="Deployment" icon="server" href="/admin-guides/deployment">
+    Configure production-grade deployments with HA, MySQL, and optimizer containers.
+  </Card>
+  <Card title="Managing Optimizers" icon="sliders" href="/admin-guides/managing-optimizers">
+    Set up optimizer groups and resource quotas for your tables.
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

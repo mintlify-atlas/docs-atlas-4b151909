@@ -1,0 +1,95 @@
+---
+title: "Spark Queries"
+description: "Query Amoro Mixed-format tables using Spark SQL and the DataFrame API."
+---
+
+Mixed-format tables store data in two internal stores: **BaseStore** (compacted, query-optimized data) and **ChangeStore** (recent deltas). When you run a standard `SELECT`, the connector automatically merges both stores using merge-on-read to present a consistent view. For tables without a primary key, only BaseStore is used.
+
+## Querying with SQL
+
+### Standard SELECT
+
+```sql
+SELECT * FROM mixed_catalog.db.sample;
+```
+
+The Mixed-format connector merges data from BaseStore and ChangeStore automatically, so this query always returns the latest consistent view of the table.
+
+### Querying the ChangeStore
+
+For tables with a primary key, you can read the raw change log directly by appending `.change` to the table identifier:
+
+```sql
+SELECT * FROM mixed_catalog.db.sample.change;
+```
+
+Example output:
+
+```
++---+----+----+---------------+------------+--------------+
+| id|name|data|_transaction_id|_file_offset|_change_action|
++---+----+----+---------------+------------+--------------+
+|  1|dddd|abcd|              3|           1|        INSERT|
+|  1|dddd|abcd|              3|           2|        DELETE|
++---+----+----+---------------+------------+--------------+
+```
+
+The ChangeStore exposes three additional metadata columns:
+
+| Column | Description |
+|---|---|
+| `_transaction_id` | Transaction ID assigned by AMS. Increments per SQL execution in batch mode, per checkpoint in streaming mode. |
+| `_file_offset` | Order of records written within the same `_transaction_id`. |
+| `_change_action` | Type of change record: `INSERT` or `DELETE`. |
+
+<Info>
+Querying the ChangeStore is useful for CDC pipelines and auditing. The table identifier `mixed_catalog.db.sample.change` is only valid for tables that have a primary key defined.
+</Info>
+
+### Aggregations and filters
+
+Standard Spark SQL aggregations and filters work as usual:
+
+```sql
+SELECT COUNT(1) AS count, data
+FROM mixed_catalog.db.sample
+GROUP BY data;
+```
+
+```sql
+SELECT *
+FROM mixed_catalog.db.sample
+WHERE ts >= '2022-01-01' AND ts < '2022-02-01';
+```
+
+Partition columns are used for partition pruning automatically — no special syntax is required.
+
+## Querying with DataFrames
+
+Read a Mixed-format table into a DataFrame:
+
+```scala
+val df = spark.read.table("mixed_catalog.db.sample")
+df.count()
+```
+
+Read the ChangeStore into a DataFrame:
+
+```scala
+val df = spark.read.table("mixed_catalog.db.sample.change")
+df.count()
+```
+
+<Tip>
+Use the DataFrame API when you need to chain transformations programmatically or when reading from within a JAR-based Spark job.
+</Tip>
+
+## Merge-on-read behaviour
+
+When you query a Mixed-format table with a primary key, the connector performs a merge-on-read at query time:
+
+- Rows in **BaseStore** represent the compacted baseline.
+- Rows in **ChangeStore** represent unapplied inserts and deletes since the last self-optimizing cycle.
+- The connector resolves conflicts using the `_transaction_id` and `_file_offset` metadata to determine the final state of each primary key.
+
+Self-optimizing runs in the background and gradually moves ChangeStore data into BaseStore, which reduces the merge cost over time. See [Self-optimizing](/concepts/self-optimizing) for details.

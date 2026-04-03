@@ -1,0 +1,115 @@
+---
+title: "Mixed-Hive Format"
+description: "Mixed-Hive lets you upgrade Hive tables to lakehouse format while maintaining full Hive compatibility."
+---
+
+## What is Mixed-Hive format?
+
+Mixed-Hive format provides better Hive compatibility than Mixed-Iceberg format while delivering the same streaming update and CDC capabilities. It combines:
+
+- A **Hive table** as the BaseStore — storing stable, merged data under the Hive location
+- An **Iceberg table** as the ChangeStore — storing incremental and real-time change data
+
+Mixed-Hive format schema, partition definitions, and types are fully consistent with Hive format, so existing Hive-based processes, tools, and BI products continue to work without modification.
+
+## How upgrading a Hive table works
+
+You can promote an existing Hive table to Mixed-Hive format through a **metadata-only migration** — no data is rewritten or moved. The response time is typically in seconds.
+
+After the upgrade:
+
+- Files under the Hive location are simultaneously indexed by an Iceberg manifest
+- This eliminates data redundancy between the Hive and Iceberg representations
+- The Hive location continues to serve existing Hive readers and writers
+
+<Info>
+  Amoro's Full optimizing process is responsible for keeping the Hive location up to date with recent changes. As a result, data freshness for native Hive reads is at the granularity of Full optimizing cycles, which is longer than the minute-level freshness of Mixed-Iceberg. Use Merge-on-Read queries for minute-level freshness on Mixed-Hive tables.
+</Info>
+
+## Architecture
+
+```
+┌──────────────────────────────────────────────┐
+│              Mixed-Hive Table                │
+├───────────────────────┬──────────────────────┤
+│  BaseStore            │  ChangeStore         │
+│  (Hive table)         │  (Iceberg table)     │
+│  Hive location        │  Iceberg manifest    │
+│  + Iceberg manifest   │  indexed             │
+└───────────────────────┴──────────────────────┘
+```
+
+Mixed-Hive format brings snapshot, ACID, and MVCC capabilities from Iceberg into a format that is also fully readable by the Hive connector. This gives you a flexible upgrade path for data platforms, processes, and products that have historically been built around Hive.
+
+## Hive read and write compatibility
+
+After upgrading a table to Mixed-Hive format:
+
+| Operation | Supported | Notes |
+|---|---|---|
+| Hive `SELECT` | Yes | Reads from the Hive location (BaseStore) |
+| Hive `INSERT` | Yes | Writes to the Hive location |
+| Hive `INSERT OVERWRITE` | Yes | Overwrites the Hive partition |
+| Merge-on-Read (freshness) | Yes | Use Flink or Spark for minute-level freshness |
+| Primary key enforcement | Yes | Enforced via Mixed-format conflict resolution |
+
+## Primary key and CDC support
+
+Mixed-Hive format inherits all functional features of Mixed-Iceberg format:
+
+- **Primary key constraints** enforced across Flink and Spark writes
+- **CDC incremental reads** from the ChangeStore
+- **LogStore** (optional Kafka-backed tier) for sub-second streaming latency
+- **Transaction conflict resolution** for concurrent writes with the same primary key
+
+## Engine support matrix
+
+| Engine | Read | Write | Notes |
+|---|---|---|---|
+| Apache Hive 2.x, 3.x | Yes | Yes | Reads/writes BaseStore via Hive connector |
+| Apache Flink 1.15+ | Yes | Yes | Requires Mixed-Format Flink runtime and Hive exec JAR |
+| Apache Spark 3.x | Yes | Yes | Requires Mixed-Format Spark runtime |
+| Trino | Yes | No | Query only |
+
+<Warning>
+  When using Flink with Mixed-Hive format tables, you must manually place the [Hive exec JAR](https://repo1.maven.org/maven2/org/apache/hive/hive-exec/2.1.1/hive-exec-2.1.1.jar) in the `flink/lib` directory. The Mixed-Format Flink runtime JAR does not bundle Hive dependencies.
+
+  Additionally, when creating partitioned tables, partition fields must be placed in the last column position. If there are multiple partition fields, they must all be at the end.
+</Warning>
+
+## Upgrade process
+
+<Steps>
+  <Step title="Register your Hive catalog in Amoro">
+    In the Amoro console, register the Hive Metastore as a catalog. See [Managing Catalogs](/admin-guides/managing-catalogs) for detailed steps.
+  </Step>
+  <Step title="Upgrade the Hive table to Mixed-Hive format">
+    Use the Amoro console or the Amoro REST API to trigger the upgrade on the target Hive table. The upgrade is a metadata-only operation — the underlying data files are not moved or rewritten. Completion typically takes seconds.
+  </Step>
+  <Step title="Verify Hive compatibility">
+    Run your existing Hive queries against the table to confirm they return the same results as before. The Hive location is unchanged.
+  </Step>
+  <Step title="Enable streaming writes">
+    Direct your Flink or Spark streaming jobs to write change data to the ChangeStore using the Mixed-Format connector.
+  </Step>
+  <Step title="Configure self-optimizing">
+    Amoro automatically runs self-optimizing (including Full optimizing) to keep the BaseStore Hive location current with changes from the ChangeStore.
+  </Step>
+</Steps>
+
+## Considerations
+
+- **Data freshness for Hive reads** — Native Hive reads only see data that has been committed to the BaseStore (Hive location) by the Full optimizing process. For up-to-date data, query the table through Flink or Spark using Merge-on-Read.
+- **Schema and partition consistency** — Mixed-Hive format uses Hive-compatible schemas and partition definitions. Schema evolution follows Hive's rules rather than Iceberg's more flexible model.
+- **No data migration** — The upgrade does not copy, move, or rewrite any data files. Your existing storage costs and data layout are preserved.
+
+## When to choose Mixed-Hive
+
+| Requirement | Recommendation |
+|---|---|
+| Cannot break existing Hive pipelines or BI tools | Mixed-Hive |
+| Need primary keys and CDC on top of existing Hive tables | Mixed-Hive |
+| Starting fresh with no existing Hive tables | Mixed-Iceberg |
+| Need maximum Iceberg ecosystem compatibility | Iceberg |
+
+See also: [Mixed-Iceberg Format](/formats/mixed-iceberg) for the equivalent format without Hive compatibility requirements.

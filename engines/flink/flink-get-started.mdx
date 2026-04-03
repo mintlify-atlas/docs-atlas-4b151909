@@ -1,0 +1,201 @@
+---
+title: "Flink — Get Started"
+description: "Set up the Amoro Flink connector to read and write Mixed-format tables using Apache Flink."
+---
+
+The Apache Flink engine can process Amoro table data in both batch and streaming mode. The Flink on Amoro connector provides the ability to read and write to the Amoro data lake while ensuring data consistency. To meet high real-time data requirements, Amoro's underlying storage is designed with a LogStore layer that stores the latest changelog or append-only real-time data.
+
+<Note>
+Iceberg-format tables can be accessed using the native Iceberg Flink connector. See the [Iceberg Flink user manual](https://iceberg.apache.org/docs/latest/flink-connector/) for details. Paimon-format tables can be accessed via the [Paimon Flink connector](https://paimon.apache.org/docs/master/engines/flink/).
+
+This page covers the **Mixed-format** connector only.
+</Note>
+
+## Supported versions
+
+| Flink version | Mixed-format connector |
+|---------------|----------------------|
+| 1.18.x        | Supported            |
+| 1.19.x        | Supported            |
+
+## Connector capabilities
+
+The Amoro Flink connector includes:
+
+- **Flink SQL Select** — reads Amoro table data through Flink SQL.
+- **Flink SQL Insert** — writes data to Amoro tables through Flink SQL.
+- **Flink SQL DDL** — creates, modifies, and deletes databases and tables.
+- **FlinkSource** — reads Amoro table data through the Flink DataStream API.
+- **FlinkSink** — writes data to Amoro tables through the Flink DataStream API.
+- **Flink Lookup Join** — performs real-time reads of Amoro table data for enrichment via Temporal Join.
+
+## Runtime JAR
+
+The Flink runtime JAR is published to Maven Central. You can either download it directly or build it from source.
+
+<Tabs>
+  <Tab title="Download from Maven Central">
+
+```bash
+# Replace version values as needed
+AMORO_VERSION=0.9.0-incubating
+FLINK_MAJOR_VERSION=1.18
+MAVEN_URL=https://repo1.maven.org/maven2
+AMORO_CONNECTOR_URL=${MAVEN_URL}/org/apache/amoro
+
+wget ${AMORO_CONNECTOR_URL}/amoro-mixed-format-flink-runtime-${FLINK_MAJOR_VERSION}/${AMORO_VERSION}/amoro-mixed-format-flink-runtime-${FLINK_MAJOR_VERSION}-${AMORO_VERSION}.jar
+```
+
+  </Tab>
+  <Tab title="Build from source">
+
+```bash
+./mvnw clean package -pl ':amoro-mixed-flink-runtime-1.18' -am -DskipTests
+```
+
+The compiled JAR is placed in:
+
+```
+amoro-format-mixed/amoro-mixed-flink/v1.18/amoro-mixed-flink-runtime-1.18/target/
+```
+
+  </Tab>
+</Tabs>
+
+## Environment setup
+
+<Steps>
+  <Step title="Download Flink and dependencies">
+
+```bash
+AMORO_VERSION=0.9.0-incubating
+FLINK_VERSION=1.18.1
+FLINK_MAJOR_VERSION=1.18
+FLINK_HADOOP_SHADE_VERSION=2.7.5
+APACHE_FLINK_URL=archive.apache.org/dist/flink
+MAVEN_URL=https://repo1.maven.org/maven2
+FLINK_CONNECTOR_URL=${MAVEN_URL}/org/apache/flink
+AMORO_CONNECTOR_URL=${MAVEN_URL}/org/apache/amoro
+
+# Download Flink binary package
+wget ${APACHE_FLINK_URL}/flink-${FLINK_VERSION}/flink-${FLINK_VERSION}-bin-scala_2.12.tgz
+# Unzip Flink binary package
+tar -zxvf flink-${FLINK_VERSION}-bin-scala_2.12.tgz
+
+cd flink-${FLINK_VERSION}
+# Download Flink Hadoop dependency
+wget ${FLINK_CONNECTOR_URL}/flink-shaded-hadoop-2-uber/${FLINK_HADOOP_SHADE_VERSION}-10.0/flink-shaded-hadoop-2-uber-${FLINK_HADOOP_SHADE_VERSION}-10.0.jar
+# Download Amoro Flink connector
+wget ${AMORO_CONNECTOR_URL}/amoro-mixed-format-flink-runtime-${FLINK_MAJOR_VERSION}/${AMORO_VERSION}/amoro-mixed-format-flink-runtime-${FLINK_MAJOR_VERSION}-${AMORO_VERSION}.jar
+
+# Copy JARs to the lib directory
+mv flink-shaded-hadoop-2-uber-${FLINK_HADOOP_SHADE_VERSION}-10.0.jar lib
+mv amoro-mixed-format-flink-runtime-${FLINK_MAJOR_VERSION}-${AMORO_VERSION}.jar lib
+```
+
+  </Step>
+  <Step title="Configure Flink">
+
+Edit `conf/flink-conf.yaml` inside the Flink directory:
+
+```yaml
+# Increase slots to run multiple streaming tasks simultaneously
+taskmanager.numberOfTaskSlots: 4
+# Enable checkpointing — data is only committed to files during a checkpoint
+execution.checkpointing.interval: 10s
+```
+
+<Warning>
+Checkpointing must be enabled. Data written to Amoro tables is only committed during a Flink checkpoint. Without checkpointing, written data will not be visible.
+</Warning>
+
+  </Step>
+  <Step title="Configure the Amoro catalog">
+
+In Flink SQL Client, register the Amoro catalog with `CREATE CATALOG`:
+
+```sql
+CREATE CATALOG amoro_catalog WITH (
+    'type'         = 'mixed_iceberg',
+    'ams.uri'      = 'thrift://<ip>:<port>/<catalog_name_in_metastore>',
+    'default-database' = 'default'
+);
+
+USE CATALOG amoro_catalog;
+```
+
+  </Step>
+</Steps>
+
+## Catalog configuration properties
+
+| Key | Default | Type | Required | Description |
+|-----|---------|------|----------|-------------|
+| `type` | — | String | Yes | Catalog type. Valid values: `mixed_iceberg`, `mixed_hive`. |
+| `ams.uri` | (none) | String | No | URI of the Amoro Metastore. Format: `thrift://<ip>:<port>/<catalog_name>`. If AMS HA is enabled, use `zookeeper://{zk-server}/{cluster-name}/{catalog-name}`. |
+| `default-database` | `default` | String | No | Default database to use when none is specified. |
+| `property-version` | `1` | Integer | No | Catalog properties version for future backward compatibility. |
+| `catalog-type` | — | String | No | Underlying metastore type. Valid values: `hadoop`, `hive`, `rest`, `custom`. |
+
+### Authentication properties
+
+| Key | Default | Type | Required | Description |
+|-----|---------|------|----------|-------------|
+| `properties.auth.load-from-ams` | `true` | Boolean | No | Whether to load security configuration from AMS. |
+| `properties.auth.type` | (none) | String | No | Authentication type: `simple`, `kerberos`, or unset (no auth). |
+| `properties.auth.simple.hadoop_username` | (none) | String | No | Hadoop username for simple auth. Required when `auth.type=simple`. |
+| `properties.auth.kerberos.principal` | (none) | String | No | Kerberos principal. Required when `auth.type=kerberos`. |
+| `properties.auth.kerberos.krb.path` | (none) | String | No | Absolute path to `krb5.conf`. Required when `auth.type=kerberos`. |
+| `properties.auth.kerberos.keytab.path` | (none) | String | No | Absolute path to the `.keytab` file. Required when `auth.type=kerberos`. |
+
+## Mixed-Hive format notes
+
+Starting from Amoro 0.3.1, Mixed-Hive format is supported through Flink. Note the following requirements:
+
+- The Flink runtime JAR does not include Hive dependencies. Place the [Hive exec JAR](https://repo1.maven.org/maven2/org/apache/hive/hive-exec/2.1.1/hive-exec-2.1.1.jar) into the `flink/lib` directory manually.
+- When creating partitioned tables, partition fields must be placed in the last column(s). With multiple partition fields, all must appear at the end of the column list.
+
+## Quick read/write example
+
+```sql
+-- Switch to streaming mode
+SET execution.runtime-mode = streaming;
+SET table.dynamic-table-options.enabled = true;
+
+-- Create a table (or use an existing one)
+CREATE TABLE amoro_catalog.default.user_events (
+    user_id  BIGINT,
+    event    STRING,
+    ts       TIMESTAMP(3),
+    PRIMARY KEY (user_id) NOT ENFORCED
+) WITH (
+    'log-store.enabled' = 'false'
+);
+
+-- Write data
+INSERT INTO amoro_catalog.default.user_events VALUES (1, 'login', CURRENT_TIMESTAMP);
+
+-- Read data (batch)
+SET execution.runtime-mode = batch;
+SELECT * FROM amoro_catalog.default.user_events;
+```
+
+## Frequently asked questions
+
+<AccordionGroup>
+  <Accordion title="Data written to an Amoro table is not visible">
+    Enable Flink checkpointing. Set `execution.checkpointing.interval` in `flink-conf.yaml`. Data is only committed to files during a checkpoint.
+  </Accordion>
+  <Accordion title="Duplicate primary key rows when reading a table with write.upsert enabled">
+    Query results obtained through Flink SQL Client do not apply merge-on-read semantics by primary key. To obtain merged results, write the Amoro table contents to a downstream sink (such as a MySQL table via the JDBC connector) and query from there.
+  </Accordion>
+  <Accordion title="Duplicate primary key rows when writing via SQL Client under Flink 1.18 with write.upsert enabled">
+    Execute the following command in SQL Client before running your INSERT statement:
+
+    ```sql
+    SET table.exec.sink.upsert-materialize = none;
+    ```
+
+    This disables the upsert-materialize operator that interferes with the AmoroWriter's delete-record generation.
+  </Accordion>
+</AccordionGroup>

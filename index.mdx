@@ -1,97 +1,86 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "Apache Amoro"
+description: "A Lakehouse management system built on open data lake formats — providing self-optimizing, unified catalog service, and multi-engine support for Flink, Spark, and Trino."
 ---
 
-## Setting up
+Apache Amoro is a Lakehouse management system built on open data lake formats. It brings pluggable and self-managed features to your Lakehouse, providing an out-of-the-box data warehouse experience while helping data platforms build infra-decoupled, stream-and-batch-fused, lake-native architecture.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Get Amoro running and manage your first Lakehouse table in minutes.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Concepts" icon="book-open" href="/concepts/catalogs">
+    Understand catalogs, self-optimizing, and the core building blocks of Amoro.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Admin Guide" icon="server" href="/admin-guides/deployment">
+    Deploy and configure Amoro Management Service for production use.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Engine Integration" icon="plug" href="/engines/flink/flink-get-started">
+    Connect Flink, Spark, or Trino to your Amoro-managed tables.
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## What is Amoro?
 
-Everything you need to create world-class documentation.
+Amoro's central component is **AMS** (Amoro Management Service), which manages table metadata and provides self-optimizing and catalog services across multiple open table formats.
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
+<CardGroup cols={3}>
+  <Card title="Self-Optimizing" icon="arrows-rotate">
+    Continuously compacts small files, removes expired data, and optimizes table layout — automatically and asynchronously, with no impact on reads or writes.
   </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
+  <Card title="Multi-Format" icon="table">
+    Manage Iceberg, Mixed-Iceberg, Mixed-Hive, and Paimon tables through a single unified interface.
   </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
+  <Card title="Catalog Service" icon="database">
+    Unified catalog service for all compute engines, compatible with Hive Metastore and AWS Glue.
   </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
+  <Card title="Multi-Engine" icon="gears">
+    Full integration with Apache Flink (streaming + batch), Apache Spark (batch + overwrite), and Trino (read + overwrite).
   </Card>
-</Columns>
+  <Card title="Web Dashboard" icon="chart-bar">
+    Manage catalogs, tables, optimizers, and view real-time metrics through the built-in web UI.
+  </Card>
+  <Card title="REST API" icon="code">
+    OpenAPI-compliant HTTP API for programmatic access to all AMS management features.
+  </Card>
+</CardGroup>
 
-## Need inspiration?
+## Supported table formats
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+| Format | Streaming Write | CDC Read | Self-Optimizing | Hive Compatible |
+|---|---|---|---|---|
+| Iceberg | via Flink | via position deletes | Yes | No |
+| Mixed-Iceberg | Yes (LogStore) | Yes (ChangeStore) | Yes | No |
+| Mixed-Hive | Yes (LogStore) | Yes (ChangeStore) | Yes | Yes |
+| Paimon | via Paimon engines | — | Metadata view | — |
+
+## Supported engines
+
+<CardGroup cols={3}>
+  <Card title="Apache Flink" icon="bolt" href="/engines/flink/flink-get-started">
+    Streaming and batch reads/writes for Mixed format. Versions 1.18.x and 1.19.x.
+  </Card>
+  <Card title="Apache Spark" icon="fire" href="/engines/spark/spark-get-started">
+    Full batch read, write, and overwrite for Mixed format. Versions 3.3, 3.4, 3.5.
+  </Card>
+  <Card title="Trino" icon="magnifying-glass" href="/engines/trino">
+    Read and overwrite queries on Mixed format tables. Version 406.
+  </Card>
+</CardGroup>
+
+## Getting started
+
+<Steps>
+  <Step title="Deploy AMS">
+    Download the Amoro distribution and start the Amoro Management Service. See the [Deployment guide](/admin-guides/deployment).
+  </Step>
+  <Step title="Create a catalog">
+    Register your storage environment (Hive Metastore, Hadoop, or S3) as an Amoro catalog. See [Managing catalogs](/admin-guides/managing-catalogs).
+  </Step>
+  <Step title="Create and manage tables">
+    Create Iceberg or Mixed-format tables and let Amoro handle self-optimizing automatically. See [Using tables](/user-guides/using-tables).
+  </Step>
+  <Step title="Connect your compute engine">
+    Configure Flink, Spark, or Trino to use the Amoro catalog for reads and writes. See [Engine Integration](/engines/flink/flink-get-started).
+  </Step>
+</Steps>

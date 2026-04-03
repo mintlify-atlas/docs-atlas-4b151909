@@ -1,0 +1,160 @@
+---
+title: "Table Configurations"
+description: "Configure table-level properties for self-optimizing, data retention, and performance tuning."
+---
+
+## Multi-level configuration management
+
+Amoro supports configuration at three levels. The priority order (highest to lowest) is:
+
+1. **Engine** — Set in the query engine (Spark or Flink). Use this for runtime tuning.
+2. **Table** — Set at table creation or via `ALTER TABLE`. Use this for table-specific defaults.
+3. **Catalog** — Set in catalog properties. Use this to apply defaults across all tables in a catalog.
+
+<Tabs>
+  <Tab title="Catalog level">
+    Set default values in the catalog properties via the AMS Dashboard or REST API. See [Managing Catalogs](/admin-guides/managing-catalogs) for details.
+  </Tab>
+  <Tab title="Table level (CREATE TABLE)">
+    ```sql
+    CREATE TABLE test_db.my_table (id int, name string)
+    USING mixed_iceberg
+    TBLPROPERTIES (
+      'self-optimizing.group' = 'my-group',
+      'self-optimizing.quota' = '0.5'
+    );
+    ```
+  </Tab>
+  <Tab title="Table level (ALTER TABLE)">
+    ```sql
+    ALTER TABLE test_db.my_table SET TBLPROPERTIES (
+      'self-optimizing.enabled' = 'true',
+      'self-optimizing.quota' = '0.3'
+    );
+    ```
+  </Tab>
+  <Tab title="Engine level">
+    Refer to [Spark configuration](/engines/spark/spark-conf) and [Flink DML](/engines/flink/flink-dml) for engine-level options.
+  </Tab>
+</Tabs>
+
+## Self-optimizing configurations
+
+Self-optimizing configurations apply to both Iceberg Format and Mixed streaming Format.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `self-optimizing.enabled` | `true` | Enables self-optimizing. |
+| `self-optimizing.allow-partial-commit` | `false` | Whether to allow partial commit when self-optimizing fails or the process is cancelled. |
+| `self-optimizing.group` | `default` | Optimizer group for self-optimizing. |
+| `self-optimizing.quota` | `0.5` | Quota for self-optimizing — the proportion of optimizer resources the table can use. |
+| `self-optimizing.execute.num-retries` | `5` | Number of retries after a self-optimizing failure. |
+| `self-optimizing.target-size` | `134217728` (128 MB) | Target size for self-optimizing output files. |
+| `self-optimizing.max-file-count` | `10000` | Maximum number of files processed in a single self-optimizing process. |
+| `self-optimizing.max-task-size-bytes` | `134217728` (128 MB) | Maximum file size in bytes for a single task when splitting tasks. |
+| `self-optimizing.fragment-ratio` | `8` | Fragment file size threshold. Divide `self-optimizing.target-size` by this ratio to get the fragment threshold. |
+| `self-optimizing.min-target-size-ratio` | `0.75` | Undersized segment file threshold. Segment files below this ratio are candidates for rewriting. |
+| `self-optimizing.minor.trigger.file-count` | `12` | Minimum file count (fragment files + equality delete files) to trigger minor optimizing. |
+| `self-optimizing.minor.trigger.interval` | `3600000` (1 hour) | Time interval in milliseconds between minor optimizing runs. |
+| `self-optimizing.major.trigger.duplicate-ratio` | `0.1` | Ratio of duplicate data in segment files that triggers major optimizing. |
+| `self-optimizing.full.trigger.interval` | `-1` (disabled) | Time interval in milliseconds between full optimizing runs. `-1` disables scheduled full optimizing. |
+| `self-optimizing.full.rewrite-all-files` | `true` | Whether full optimizing rewrites all files or skips files that don't need optimization. |
+| `self-optimizing.min-plan-interval` | `60000` | Minimum time interval in milliseconds between two consecutive planning actions. |
+| `self-optimizing.filter` | `NULL` | SQL conditional expression filter for self-optimizing (no functions supported). Use ISO date-time format for timestamp columns, e.g. `op_time > '2007-12-03T10:15:30'`. |
+| `self-optimizing.refresh-table.adaptive.max-interval-ms` | `0` | Maximum interval in milliseconds to refresh table metadata. `0` disables adaptive refresh. When enabled, must be greater than `refresh-tables.interval`. |
+| `self-optimizing.refresh-table.adaptive.increase-step-ms` | `30000` (30 s) | Step size in milliseconds for increasing the table metadata refresh interval. |
+
+## Data-cleaning configurations
+
+Data-cleaning configurations apply to both Iceberg Format and Mixed streaming Format.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `table-expire.enabled` | `true` | Enables periodic table expiration. |
+| `change.data.ttl.minutes` | `10080` (7 days) | Time-to-live in minutes for ChangeStore data. |
+| `snapshot.keep.duration` | `720 min` (12 hours) | Table expiration retains the latest snapshots within this duration. |
+| `snapshot.keep.min-count` | `1` | Minimum number of snapshots retained during table expiration. |
+| `snapshot.keep.flink.checkpoint-retention` | `7d` (7 days) | Retention period for snapshots created by Flink checkpoints. Accepts duration strings like `"7d"`, `"168h"`, `"10080min"`. |
+| `clean-orphan-file.enabled` | `false` | Enables periodic orphan file cleanup. |
+| `clean-orphan-file.min-existing-time-minutes` | `2880` (2 days) | Orphan file cleanup retains files modified within this duration (in minutes). |
+| `clean-dangling-delete-files.enabled` | `true` | Enables cleanup of dangling delete files. |
+| `data-expire.enabled` | `false` | Enables data expiration. |
+| `data-expire.level` | `partition` | Expiration level: `partition` or `file`. |
+| `data-expire.field` | `NULL` | Field used to determine expiration. Supports `timestamp`, `timestampz`, `long`, and `string` (date format) types. |
+| `data-expire.datetime-string-pattern` | `yyyy-MM-dd` | Date pattern for parsing string datetime fields. |
+| `data-expire.datetime-number-format` | `TIMESTAMP_MS` | Timestamp unit for long fields: `TIMESTAMP_MS` or `TIMESTAMP_S`. |
+| `data-expire.retention-time` | `NULL` | Retention period for data expiration. Example: `1d` (1 day). Supported units: `h`, `min`, `s`, `ms`. |
+| `data-expire.base-on-rule` | `LAST_COMMIT_TIME` | Expiration start rule: `LAST_COMMIT_TIME` (uses latest non-optimized snapshot timestamp) or `CURRENT_TIME` (uses AMS service time). |
+
+## Tags configurations
+
+Tags configurations currently apply to Iceberg Format only. Mixed Format support is planned.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `tag.auto-create.enabled` | `false` | Enables automatic tag creation. |
+| `tag.auto-create.trigger.period` | `daily` | Period for creating tags: `daily` or `hourly`. |
+| `tag.auto-create.trigger.offset.minutes` | `0` | Minutes after midnight (00:00) at which to create the tag. |
+| `tag.auto-create.trigger.max-delay.minutes` | `60` | Maximum delay allowed when creating a tag. |
+| `tag.auto-create.tag-format` | `'tag-'yyyyMMdd` (daily) / `'tag-'yyyyMMddHH` (hourly) | Name format for auto-created tags. Changes do not apply to existing tags. |
+| `tag.auto-create.max-age-ms` | `-1` | Retention duration for auto-created tags in milliseconds. `-1` retains tags forever. Changes do not apply to existing tags. |
+
+## Mixed Format configurations
+
+For Iceberg Format tables, refer to [Iceberg configuration](https://iceberg.apache.org/docs/latest/configuration/). The configurations below apply to Mixed Format only.
+
+### Reading configurations
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `read.split.open-file-cost` | `4194304` (4 MB) | Estimated cost to open a file, used in split planning. |
+| `read.split.planning-lookback` | `10` | Number of bins to consider when combining input splits. |
+| `read.split.target-size` | `134217728` (128 MB) | Target size when combining data input splits. |
+| `read.split.delete-ratio` | `0.05` | When the ratio of delete files falls below this threshold, the read task is split into more tasks to improve query performance. |
+
+### Writing configurations
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `base.write.format` | `parquet` | File format for BaseStore. Applies to keyed tables. |
+| `change.write.format` | `parquet` | File format for ChangeStore. Applies to keyed tables. |
+| `write.format.default` | `parquet` | Default file format. Applies to unkeyed tables. |
+| `base.file-index.hash-bucket` | `4` | Initial number of buckets for BaseStore auto-bucket. |
+| `change.file-index.hash-bucket` | `4` | Initial number of buckets for ChangeStore auto-bucket. |
+| `write.target-file-size-bytes` | `134217728` (128 MB) | Target file size when writing. |
+| `write.upsert.enabled` | `false` | When enabled, multiple inserts with the same primary key are merged. |
+| `write.distribution-mode` | `hash` | Shuffle mode for writes. Unkeyed tables support `none` or `hash`; keyed tables support `hash` only. |
+| `write.distribution.hash-mode` | `auto` | Auto-bucket mode: `primary-key`, `partition-key`, `primary-partition-key`, or `auto`. |
+| `base.refresh-interval` | `-1` (disabled) | Interval for refreshing the BaseStore. |
+
+### LogStore configurations
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `log-store.enabled` | `false` | Enables LogStore. |
+| `log-store.type` | `kafka` | LogStore type: `kafka` or `pulsar`. |
+| `log-store.address` | `NULL` | LogStore address. For Kafka: bootstrap servers. For Pulsar: service URL, e.g. `pulsar://localhost:6650`. Required when LogStore is enabled. |
+| `log-store.topic` | `NULL` | LogStore topic. Required when LogStore is enabled. |
+| `properties.pulsar.admin.adminUrl` | `NULL` | HTTP URL of the Pulsar admin service, e.g. `http://my-broker.example.com:8080`. Required when `log-store.type=pulsar`. |
+| `properties.XXX` | `NULL` | Additional LogStore properties. Prefix with `properties.` to pass Kafka consumer/producer or Pulsar connector properties. |
+
+<Tip>
+  For Kafka, all consumer and producer configurations are supported via the `properties.` prefix, such as `'properties.batch.size'='16384'`. For Pulsar, use the Flink Pulsar connector property format, such as `'properties.pulsar.client.requestTimeoutMs'='60000'`.
+</Tip>
+
+### Watermark configurations
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `table.event-time-field` | `_ingest_time` | Event time field for calculating the watermark. The default `_ingest_time` uses the time data was written. |
+| `table.watermark-allowed-lateness-second` | `0` | Allowed lateness in seconds for out-of-order data when calculating the watermark. |
+| `table.event-time-field.datetime-string-format` | `yyyy-MM-dd HH:mm:ss` | Format for the event time field when it is a string. |
+| `table.event-time-field.datetime-number-format` | `TIMESTAMP_MS` | Format for the event time field when it is numeric: `TIMESTAMP_MS` (milliseconds) or `TIMESTAMP_S` (seconds). |
+
+### Mixed-Hive format configurations
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `base.hive.auto-sync-schema-change` | `true` | Synchronizes schema changes from HMS to the Hive table. |
+| `base.hive.auto-sync-data-write` | `false` | Synchronizes data changes from HMS. Set to `true` when writing to Hive. |
+| `base.hive.consistent-write.enabled` | `true` | Writes files as hidden files and renames them to visible on commit, preventing dirty reads. |

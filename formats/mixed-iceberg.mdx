@@ -1,0 +1,203 @@
+---
+title: "Mixed-Iceberg Format"
+description: "Mixed-Iceberg provides accelerated streaming updates and CDC incremental reading on top of the Iceberg format."
+---
+
+## What is Mixed-Iceberg format?
+
+Mixed-Iceberg format is Amoro's optimized storage format for stream-batch integrated and real-time data warehouse workloads. It builds on top of the Iceberg format and adds:
+
+- **Enforced primary key constraints** — applied across Spark and Flink
+- **Production-ready OLAP performance** for real-time data warehouses via the auto-bucket mechanism
+- **LogStore integration** — reduces data pipeline latency from minutes to milliseconds or seconds
+- **Transaction conflict resolution** — enables concurrent writes with the same primary key
+
+The design goal of Mixed-Iceberg format is to provide a storage layer for stream-batch integrated, offline-real-time unified data warehouses on big data platforms built on data lakes.
+
+## Architecture: three-tier TableStore
+
+Mixed-Iceberg format uses a three-tier structure, where each tier is called a TableStore:
+
+```
+┌──────────────────────────────────────────┐
+│              Mixed-Iceberg Table         │
+├──────────────┬───────────────────────────┤
+│  BaseStore   │  ChangeStore  │ LogStore  │
+│ (Iceberg)    │  (Iceberg)    │ (Kafka)   │
+└──────────────┴───────────────┴───────────┘
+```
+
+| TableStore | Purpose | Written by |
+|---|---|---|
+| **BaseStore** | Stores the stable, merged snapshot of the table — friendly to read-heavy operations | Batch jobs and the Amoro self-optimizing process |
+| **ChangeStore** | Stores incremental and change data — friendly to write-heavy streaming operations | Real-time streaming jobs |
+| **LogStore** (optional) | Acts as a cache layer in front of ChangeStore to accelerate stream processing | Managed automatically by Amoro for consistency |
+
+Both BaseStore and ChangeStore use Iceberg format internally, with identical partition layouts. Merge-on-read between the two stores provides high-freshness OLAP query results.
+
+<Info>
+  Amoro's Minor optimizing generally keeps the data freshness of the Iceberg BaseStore at the minute level.
+</Info>
+
+## Auto-bucket mechanism
+
+The auto-bucket feature partitions data within each partition into non-overlapping primary key hash buckets. This:
+
+- Controls BaseStore file sizes within a configured target size
+- Dynamically splits or merges buckets as data volume changes
+- Greatly reduces the amount of data scanned during self-optimizing and merge-on-read operations
+
+Auto-bucket is based on the paper [Scalable, Distributed Data Structures for Internet Service Construction](https://people.eecs.berkeley.edu/~culler/papers/dds.pdf).
+
+## Primary key support and CDC scenarios
+
+Mixed-Iceberg format enforces primary key uniqueness through the ChangeStore and the conflict resolution mechanism. This makes it suitable for:
+
+- **Upsert pipelines** from databases via CDC ingestion (Flink CDC, Debezium, etc.)
+- **Downstream CDC consumption** — the ChangeStore itself can be read as an ordered CDC stream
+- **Real-time aggregations** over frequently-updated dimensional or fact tables
+
+## LogStore for streaming acceleration
+
+When LogStore is configured (typically backed by Apache Kafka), Amoro manages consistency between the LogStore and ChangeStore automatically. Downstream Flink jobs can read from LogStore with sub-second latency instead of waiting for data to land in the ChangeStore.
+
+## Engine compatibility
+
+| Engine | Read | Write | Notes |
+|---|---|---|---|
+| Apache Flink 1.15+ | Yes | Yes | Full streaming and batch support |
+| Apache Flink 1.18+ | Yes | Yes | Includes upsert-materialize fix |
+| Apache Spark 3.x | Yes | Yes | Requires Mixed-Format Spark runtime |
+| Trino | Yes | No | Query only |
+
+### Flink setup
+
+```bash
+# Download the Mixed-Format Flink runtime JAR
+AMORO_VERSION=0.9.0-incubating
+FLINK_MAJOR_VERSION=1.18
+MAVEN_URL=https://repo1.maven.org/maven2
+
+wget ${MAVEN_URL}/org/apache/amoro/amoro-mixed-format-flink-runtime-${FLINK_MAJOR_VERSION}/${AMORO_VERSION}/amoro-mixed-format-flink-runtime-${FLINK_MAJOR_VERSION}-${AMORO_VERSION}.jar
+```
+
+### Spark setup
+
+```bash
+spark-shell --packages org.apache.amoro:amoro-mixed-spark-3.3-runtime:0.7.0
+```
+
+Add the Amoro catalog to your Spark session:
+
+```bash
+${SPARK_HOME}/bin/spark-sql \
+    --conf spark.sql.extensions=org.apache.amoro.spark.MixedFormatSparkExtensions \
+    --conf spark.sql.catalog.local_catalog=org.apache.amoro.spark.MixedFormatSparkCatalog \
+    --conf spark.sql.catalog.local_catalog.ams.uri=thrift://${AMS_HOST}:${AMS_PORT}/${AMS_CATALOG_NAME}
+```
+
+### Creating a Mixed-Iceberg table
+
+<Tabs>
+  <Tab title="Spark SQL">
+    ```sql
+    -- Unpartitioned table with primary key
+    CREATE TABLE test_db.orders (
+      id INT,
+      customer STRING,
+      amount DOUBLE,
+      PRIMARY KEY (id)
+    ) USING mixed_iceberg;
+
+    -- Partitioned table with primary key and hidden partition
+    CREATE TABLE test_db.events (
+      id INT,
+      data STRING,
+      ts TIMESTAMP,
+      PRIMARY KEY (id)
+    ) USING mixed_iceberg
+    PARTITIONED BY (days(ts));
+    ```
+  </Tab>
+  <Tab title="Flink SQL">
+    ```sql
+    CREATE TABLE test_db.orders (
+      id INT,
+      customer STRING,
+      amount DOUBLE,
+      PRIMARY KEY (id) NOT ENFORCED
+    ) WITH (
+      'connector' = 'mixed-format'
+    );
+    ```
+  </Tab>
+</Tabs>
+
+### Querying BaseStore and ChangeStore directly
+
+Using the native Iceberg Spark connector, you can access BaseStore and ChangeStore individually:
+
+```sql
+-- Connect to the Hadoop-backed Iceberg catalog
+use local;
+
+-- Query BaseStore (stable, optimized data)
+SELECT * FROM local.test_db.test_table.base;
+
+-- Query ChangeStore (incremental/change data)
+SELECT * FROM local.test_db.test_table.change;
+
+-- Insert directly into BaseStore
+INSERT INTO local.test_db.test_table.base
+VALUES (10, 'tony', TIMESTAMP('2022-07-03 12:10:30'));
+```
+
+```bash
+# Launch Spark SQL with the Iceberg connector pointed at Mixed-Iceberg warehouse
+spark-sql --packages org.apache.iceberg:iceberg-spark-runtime-3.2_2.12:0.14.0 \
+    --conf spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions \
+    --conf spark.sql.catalog.local=org.apache.iceberg.spark.SparkCatalog \
+    --conf spark.sql.catalog.local.type=hadoop \
+    --conf spark.sql.catalog.local.warehouse=/tmp/amoro/warehouse
+```
+
+## Limitations
+
+<Warning>
+  Be aware of these constraints before adopting Mixed-Iceberg format:
+
+  - **Hive compatibility** — In scenarios where Hive and Iceberg compatibility is enabled, primary key uniqueness violations or conflict resolution failures may occur.
+  - **Partition key requirement** — When the primary key does not include partition keys and stream data has no updates, you must use normalized operators or equivalent methods to restore previous data and ensure primary key uniqueness.
+  - **Engine support** — Currently supports read/write with Flink and Spark, and query-only with Trino.
+</Warning>
+
+## When to choose Mixed-Iceberg over native Iceberg
+
+| Requirement | Iceberg | Mixed-Iceberg |
+|---|---|---|
+| Self-optimizing and file management | Yes | Yes |
+| No schema changes needed | Yes | Yes |
+| Enforced primary key constraints | No | Yes |
+| Sub-minute data freshness | No | Yes |
+| CDC incremental reads | No | Yes |
+| LogStore streaming acceleration | No | Yes |
+| Full Iceberg ecosystem compatibility | Yes | Partial |
+
+## Migration path from Iceberg to Mixed-Iceberg
+
+There is no automated in-place migration path from a native Iceberg table to Mixed-Iceberg format today. The recommended approach is:
+
+<Steps>
+  <Step title="Create a new Mixed-Iceberg table">
+    Create the target Mixed-Iceberg table with the same schema and your desired primary key definition.
+  </Step>
+  <Step title="Backfill from the existing Iceberg table">
+    Use a batch Spark or Flink job to read the Iceberg table and write it into the BaseStore of the new Mixed-Iceberg table.
+  </Step>
+  <Step title="Switch streaming writes">
+    Redirect your streaming pipeline to write to the Mixed-Iceberg table's ChangeStore.
+  </Step>
+  <Step title="Register in Amoro">
+    Register the new table's catalog in Amoro to enable self-optimizing. See [Managing Catalogs](/admin-guides/managing-catalogs).
+  </Step>
+</Steps>

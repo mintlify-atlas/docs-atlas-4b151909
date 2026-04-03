@@ -1,0 +1,58 @@
+---
+title: "Catalogs"
+description: "Understand how Amoro uses catalogs to provide unified metadata management across data sources and compute engines."
+keywords: ["amoro", "catalog", "multi-catalog", "hive metastore", "glue", "metadata", "federated query"]
+---
+
+A catalog is a metadata namespace that stores information about databases, tables, views, indexes, users, and UDFs. It provides a higher-level namespace for tables and databases, and is typically associated with a specific type of data source or cluster.
+
+## Multi-catalog design
+
+In Flink, Spark, and Trino, the multi-catalog feature enables SQL across data sources. For example, a federated query joining tables from two separate clusters looks like this:
+
+```sql
+SELECT c.ID, c.NAME, c.AGE, o.AMOUNT
+FROM catalog_a.ONLINE.CUSTOMERS c JOIN catalog_b.OFFLINE.ORDERS o
+ON (c.ID = o.CUSTOMER_ID)
+```
+
+Historically, data lakes were managed using Hive Metastore (HMS) for metadata. HMS does not support multi-catalog, which limits engine capabilities on the data lake. For example, users wanting to use Spark for federated computation across different Hive clusters had to develop a custom Hive catalog plugin at the application layer.
+
+Data lake formats have also moved away from a single Hive-centric approach toward a landscape of competing formats — Iceberg, Delta, Hudi, and Paimon — which are more cloud-friendly and facilitate migration to cloud object storage. In this context, a management system that supports multi-catalog is needed to help users govern data lakes across different environments and formats.
+
+## How catalogs work in Amoro
+
+Users create catalogs in Amoro for different environments, clusters, and table formats. By leveraging the multi-catalog feature in Flink, Spark, and Trino, teams can perform federated computation across multiple clusters and formats through a single query.
+
+Properties configured at the catalog level are shared by all tables and users within that catalog, avoiding duplicated configuration. This makes Amoro's catalog system a natural metadata center for data platforms.
+
+When AMS and HMS are used together, HMS serves as the storage foundation for AMS. With the Iceberg format, you can leverage Amoro's multi-catalog management functionality without introducing any Amoro-specific client dependencies into your compute jobs.
+
+## Catalog types
+
+Amoro supports the following metastore backends when creating a catalog:
+
+| Metastore type | Description |
+|---------------|-------------|
+| **Hive Metastore** | Uses an existing HMS instance as the catalog backend. Enables compatibility with existing Hive tables and Mixed-Hive format. |
+| **Hadoop** | Stores metadata directly on a Hadoop-compatible file system. Suitable for environments without HMS. |
+| **AWS Glue** | Uses AWS Glue Data Catalog as the metadata backend. Recommended for deployments on AWS. |
+
+Each catalog is also configured with a default table format (Iceberg, Mixed-Iceberg, Mixed-Hive, or Paimon), which determines how tables in that catalog are stored and managed.
+
+## Creating and managing catalogs
+
+Amoro's catalog management was introduced in v0.4. Table creation is performed under a catalog. You can create, edit, and delete catalogs from the **Catalogs** section of the Dashboard. Each catalog requires configuration of:
+
+- **Metastore** — the metadata backend type and connection details
+- **Table format** — the default format for tables in the catalog
+- **Storage** — file system type (HDFS, S3, OSS, etc.) and access credentials
+
+For full configuration instructions, see [Managing Catalogs](/admin-guides/managing-catalogs).
+
+## Future directions
+
+AMS plans to extend the catalog system in two areas:
+
+- **Expanded data sources** — In addition to data lakes, message queues, databases, and data warehouses will be manageable as objects in the catalog. Through the metadata center and SQL-based federated computing, AMS will provide infrastructure solutions for DataOps and DataFabric platforms.
+- **Automatic catalog detection** — In compute engines like Spark and Flink, AMS will support automatically detecting the creation and changes of a catalog, enabling a one-time configuration with permanent scalability.

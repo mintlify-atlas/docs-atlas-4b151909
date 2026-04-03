@@ -1,0 +1,92 @@
+---
+title: "Introduction"
+description: "Apache Amoro is a Lakehouse management system built on open data lake formats."
+keywords: ["amoro", "lakehouse", "data lake", "iceberg", "paimon", "self-optimizing", "AMS"]
+---
+
+Apache Amoro (incubating) is a Lakehouse management system built on open data lake formats. Working with compute engines including Flink, Spark, and Trino, Amoro brings pluggable and self-managed features for Lakehouse to provide an out-of-the-box data warehouse experience, and helps data platforms or products easily build infra-decoupled, stream-and-batch-fused, and lake-native architecture.
+
+## Architecture
+
+The core components of Amoro are:
+
+**AMS — Amoro Management Service**
+
+AMS provides Lakehouse management features such as self-optimizing and data expiration. It also provides a unified catalog service for all compute engines, which can be combined with existing metadata services like Hive Metastore or AWS Glue.
+
+**Plugins**
+
+Amoro provides a wide selection of external plugins to meet different scenarios:
+
+- **Optimizers** — The self-optimizing execution engine plugin asynchronously performs merging, sorting, deduplication, layout optimization, and other operations on all table format types.
+- **Terminal** — SQL command-line tools with various implementations including local Spark and Kyuubi.
+- **LogStore** — Provides millisecond-to-second level SLAs for real-time data processing based on message queues like Kafka and Pulsar.
+
+## Supported table formats
+
+Amoro can manage tables of different table formats, similar to how MySQL or ClickHouse can choose different storage engines. Currently, Amoro supports four table formats:
+
+| Format | Description |
+|--------|-------------|
+| **Iceberg** | Native Apache Iceberg format. Users can entrust their Iceberg tables to Amoro for maintenance, gaining all Iceberg features plus Amoro's performance and stability improvements. |
+| **Mixed-Iceberg** | Built on top of Iceberg format with optimizations for streaming update scenarios. Choose this when you have high performance requirements for streaming updates or need CDC incremental data reading. |
+| **Mixed-Hive** | Same capabilities as Mixed-Iceberg, but compatible with existing Hive tables. Supports upgrading Hive tables to Mixed-Hive format through metadata migration, while keeping original Hive reads working. |
+| **Paimon** | Amoro supports displaying Paimon metadata including Schema, Options, Files, Snapshots, DDLs, and Compaction information. |
+
+## Supported engines
+
+### Iceberg format
+
+Iceberg format tables use the engine integration method provided by the Iceberg community. For details, refer to the [Iceberg documentation](https://iceberg.apache.org/docs/latest/).
+
+### Paimon format
+
+Paimon format tables use the engine integration method provided by the Paimon community. For details, refer to the [Paimon documentation](https://paimon.apache.org/docs/master/).
+
+### Mixed format
+
+| Processing Engine | Version | Batch Read | Batch Write | Batch Overwrite | Streaming Read | Streaming Write | Create Table | Alter Table |
+|-------------------|---------|------------|-------------|-----------------|----------------|-----------------|--------------|-------------|
+| Flink | 1.18.x, 1.19.x | ✔ | ✔ | ✖ | ✔ | ✔ | ✔ | ✖ |
+| Spark | 3.3, 3.4, 3.5 | ✔ | ✔ | ✔ | ✖ | ✖ | ✔ | ✔ |
+| Hive | 2.x, 3.x | ✔ | ✖ | ✔ | ✖ | ✖ | ✖ | ✔ |
+| Trino | 406 | ✔ | ✖ | ✔ | ✖ | ✖ | ✖ | ✔ |
+
+## Key use cases
+
+<AccordionGroup>
+  <Accordion title="Self-managed streaming Lakehouse">
+    Amoro makes it easier to handle the challenges of writing to a real-time data lake, such as ingesting append-only event logs or CDC data from databases. In these scenarios, the rapid increase of fragment and redundant files cannot be ignored.
+
+    Amoro provides a pluggable streaming data self-optimizing mechanism that automatically compacts fragment files and removes expired data, ensuring high-quality table queries while reducing system costs.
+  </Accordion>
+
+  <Accordion title="Stream-and-batch-fused data pipeline">
+    Whether in AI or BI business domains, the requirement for real-time analysis keeps growing. The traditional approach of using a single streaming job to complete all data processing from source to end is no longer sufficient.
+
+    Amoro fully leverages the characteristics of new data lake table formats for unified streaming and batch processing. It enhances critical features such as incremental reading for CDC data and streaming dimension table association, helping users build a stream-and-batch-fused data pipeline.
+  </Accordion>
+
+  <Accordion title="Cloud-native Lakehouse">
+    Most data platforms are tightly coupled with their underlying infrastructure. Migrating infrastructure, such as switching to cloud-native object storage, may require extensive adaptation or may not be possible at all.
+
+    Amoro provides an infra-decoupled, lake-native architecture built on top of the infrastructure. Products built on Amoro interact with the underlying infrastructure through the unified Amoro Catalog service, isolating upper-layer products from infrastructure changes.
+  </Accordion>
+</AccordionGroup>
+
+## Where to go next
+
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Download Amoro, configure AMS, and create your first managed table in minutes.
+  </Card>
+  <Card title="Catalogs" icon="folder-tree" href="/concepts/catalogs">
+    Learn how Amoro uses catalogs to provide unified metadata management across data sources.
+  </Card>
+  <Card title="Self-Optimizing" icon="arrows-rotate" href="/concepts/self-optimizing">
+    Understand how Amoro continuously optimizes tables to maintain query performance.
+  </Card>
+  <Card title="Deployment" icon="server" href="/admin-guides/deployment">
+    Configure and deploy AMS for production use with MySQL or PostgreSQL.
+  </Card>
+</CardGroup>

@@ -1,0 +1,249 @@
+---
+title: "Flink DDL"
+description: "Create and manage Amoro Mixed-format tables using Flink SQL DDL statements."
+---
+
+## Create a catalog
+
+### Flink SQL
+
+```sql
+CREATE CATALOG <catalog_name> WITH (
+  'type'    = 'mixed_iceberg',
+  '<key>'   = '<value>'
+);
+```
+
+#### Catalog properties
+
+| Key | Default | Type | Required | Description |
+|-----|---------|------|----------|-------------|
+| `type` | — | String | Yes | Catalog type. Valid values: `mixed_iceberg`, `mixed_hive`. |
+| `ams.uri` | (none) | String | No | Amoro Metastore URI: `thrift://<ip>:<port>/<catalog_name>`. If HA is enabled: `zookeeper://{zk-server}/{cluster-name}/{catalog-name}`. |
+| `default-database` | `default` | String | No | Default database. |
+| `property-version` | `1` | Integer | No | Properties version for backward compatibility. |
+| `catalog-type` | — | String | No | Metastore type. Valid values: `hadoop`, `hive`, `rest`, `custom`. |
+
+#### Authentication properties
+
+| Key | Default | Type | Required | Description |
+|-----|---------|------|----------|-------------|
+| `properties.auth.load-from-ams` | `true` | Boolean | No | Load security config from AMS. When `true`, AMS-stored credentials are used unless overridden below. |
+| `properties.auth.type` | (none) | String | No | Auth type: `simple`, `kerberos`, or unset (no auth check). |
+| `properties.auth.simple.hadoop_username` | (none) | String | No | Hadoop username. Required when `auth.type=simple`. |
+| `properties.auth.kerberos.principal` | (none) | String | No | Kerberos principal. Required when `auth.type=kerberos`. |
+| `properties.auth.kerberos.krb.path` | (none) | String | No | Absolute local path to `krb5.conf`. Required when `auth.type=kerberos`. |
+| `properties.auth.kerberos.keytab.path` | (none) | String | No | Absolute local path to `.keytab`. Required when `auth.type=kerberos`. |
+
+### YAML configuration
+
+For Flink SQL Client, you can also declare the catalog in `conf/sql-client-defaults.yaml`:
+
+```yaml
+catalogs:
+  - name: <catalog_name>
+    type: mixed_iceberg
+    ams.uri: thrift://<ip>:<port>/<catalog_name>
+```
+
+Refer to the [Flink SQL Client configuration docs](https://nightlies.apache.org/flink/flink-docs-release-1.12/dev/table/sqlClient.html#environment-files) for the full YAML schema.
+
+---
+
+## CREATE statements
+
+### CREATE DATABASE
+
+```sql
+CREATE DATABASE [catalog_name.]mixed_db;
+
+USE mixed_db;
+```
+
+### CREATE TABLE
+
+```sql
+CREATE TABLE `mixed_catalog`.`mixed_db`.`test_table` (
+    id       BIGINT,
+    name     STRING,
+    op_time  TIMESTAMP,
+    ts3      AS CAST(op_time AS TIMESTAMP(3)),
+    WATERMARK FOR ts3 AS ts3 - INTERVAL '5' SECOND,
+    proc     AS PROCTIME(),
+    PRIMARY KEY (id) NOT ENFORCED
+) WITH (
+    'key' = 'value'
+);
+```
+
+The following Flink SQL `CREATE TABLE` features are supported:
+
+- `PARTITION BY (col1, col2, ...)` — configure partition fields. Flink does not support hidden partitions, so only value-equal partitioning is available via Flink SQL.
+- `PRIMARY KEY (col1, col2, ...) NOT ENFORCED` — define primary key columns.
+- `WITH ('key'='value', ...)` — set Amoro table properties.
+- `col AS <expression>` — computed columns. Computed columns must appear after all physical columns.
+- `WATERMARK FOR rowtime_col AS <expr>` — watermark definition. The rowtime column must be `TIMESTAMP(3)`.
+
+<Note>
+Amoro tables support hidden partitions, but Flink SQL does not support function-based partition transforms. Only identity-value partitions can be created through Flink SQL.
+</Note>
+
+#### PARTITIONED BY
+
+```sql
+CREATE TABLE `mixed_catalog`.`new`.`test_table` (
+    id       BIGINT,
+    name     STRING,
+    op_time  TIMESTAMP
+) PARTITIONED BY (op_time) WITH (
+    'key' = 'value'
+);
+```
+
+#### Without a registered catalog
+
+You can create a table without first creating a Flink catalog by specifying the connector and AMS URI directly:
+
+```sql
+CREATE TABLE `test_table` (
+    id      BIGINT,
+    name    STRING,
+    op_time TIMESTAMP,
+    proc    AS PROCTIME(),
+    PRIMARY KEY (id) NOT ENFORCED
+) WITH (
+    'connector'              = 'mixed-format',
+    'ams.uri'                = 'thrift://<ip>:<port>/<catalog_name>',
+    'mixed_format.catalog'   = '<catalog_name>',
+    'mixed_format.database'  = '<database_name>',
+    'mixed_format.table'     = '<table_name>'
+);
+```
+
+### CREATE TABLE LIKE
+
+Create a new table with the same schema, partitions, and properties as an existing table:
+
+```sql
+CREATE TABLE `mixed_catalog`.`mixed_db`.`test_table` (
+    id      BIGINT,
+    name    STRING,
+    op_time TIMESTAMP
+);
+
+CREATE TABLE `mixed_catalog`.`mixed_db`.`test_table_like`
+    LIKE `mixed_catalog`.`mixed_db`.`test_table`;
+```
+
+See [Flink CREATE TABLE LIKE](https://nightlies.apache.org/flink/flink-docs-release-1.12/dev/table/sql/create.html#like) for further options.
+
+---
+
+## DROP statements
+
+### DROP DATABASE
+
+```sql
+DROP DATABASE catalog_name.mixed_db;
+```
+
+### DROP TABLE
+
+```sql
+DROP TABLE `mixed_catalog`.`mixed_db`.`test_table`;
+```
+
+---
+
+## SHOW statements
+
+### SHOW DATABASES
+
+```sql
+SHOW DATABASES;
+```
+
+### SHOW TABLES
+
+```sql
+SHOW TABLES;
+```
+
+### SHOW CREATE TABLE
+
+```sql
+SHOW CREATE TABLE;
+```
+
+---
+
+## DESC statement
+
+```sql
+DESC TABLE;
+```
+
+---
+
+## ALTER statement
+
+<Warning>
+ALTER TABLE is not supported for Mixed-format tables at this time.
+</Warning>
+
+---
+
+## Supported data types
+
+<Tabs>
+  <Tab title="Mixed-Hive">
+
+| Flink data type | Hive data type |
+|-----------------|----------------|
+| `STRING`        | `CHAR(p)`      |
+| `STRING`        | `VARCHAR(p)`   |
+| `STRING`        | `STRING`       |
+| `BOOLEAN`       | `BOOLEAN`      |
+| `INT`           | `TINYINT`      |
+| `INT`           | `SMALLINT`     |
+| `INT`           | `INT`          |
+| `BIGINT`        | `BIGINT`       |
+| `FLOAT`         | `FLOAT`        |
+| `DOUBLE`        | `DOUBLE`       |
+| `DECIMAL(p, s)` | `DECIMAL(p, s)`|
+| `DATE`          | `DATE`         |
+| `TIMESTAMP(6)`  | `TIMESTAMP`    |
+| `VARBINARY`     | `BINARY`       |
+| `ARRAY<T>`      | `ARRAY<T>`     |
+| `MAP<K, V>`     | `MAP<K, V>`    |
+| `ROW`           | `STRUCT`       |
+
+  </Tab>
+  <Tab title="Mixed-Iceberg">
+
+| Flink data type                     | Mixed-Iceberg data type |
+|-------------------------------------|-------------------------|
+| `CHAR(p)`                           | `STRING`                |
+| `VARCHAR(p)`                        | `STRING`                |
+| `STRING`                            | `STRING`                |
+| `BOOLEAN`                           | `BOOLEAN`               |
+| `TINYINT`                           | `INT`                   |
+| `SMALLINT`                          | `INT`                   |
+| `INT`                               | `INT`                   |
+| `BIGINT`                            | `LONG`                  |
+| `FLOAT`                             | `FLOAT`                 |
+| `DOUBLE`                            | `DOUBLE`                |
+| `DECIMAL(p, s)`                     | `DECIMAL(p, s)`         |
+| `DATE`                              | `DATE`                  |
+| `TIMESTAMP(6)`                      | `TIMESTAMP`             |
+| `TIMESTAMP(6) WITH LOCAL TIME ZONE` | `TIMESTAMPTZ`           |
+| `BINARY(p)`                         | `FIXED(p)`              |
+| `BINARY(16)`                        | `UUID`                  |
+| `VARBINARY`                         | `BINARY`                |
+| `ARRAY<T>`                          | `ARRAY<T>`              |
+| `MAP<K, V>`                         | `MAP<K, V>`             |
+| `ROW`                               | `STRUCT`                |
+| `MULTISET<T>`                       | `MAP<T, INT>`           |
+
+  </Tab>
+</Tabs>

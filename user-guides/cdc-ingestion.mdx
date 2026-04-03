@@ -1,0 +1,43 @@
+---
+title: "CDC Ingestion"
+description: "Ingest Change Data Capture streams into Amoro-managed tables for real-time lakehouse updates."
+---
+
+CDC (Change Data Capture) refers to any mechanism that captures changes to data. Log-based CDC tools capture all inserts, updates, and deletes from a source database and stream them downstream in real time.
+
+Amoro supports ingesting CDC data into both [Iceberg](/formats/iceberg) and [Mixed-Iceberg](/formats/mixed-iceberg) format tables, allowing your data lake to reflect upstream changes with low latency.
+
+## Apache Flink CDC
+
+[Apache Flink CDC](https://nightlies.apache.org/flink/flink-cdc-docs-stable/) is a distributed data integration tool for real-time and batch data. It uses a YAML-based pipeline description to define data movement and transformations.
+
+A common pattern is:
+
+1. Flink CDC reads Binlog data from a MySQL source using [Debezium](https://debezium.io/).
+2. Flink processes and transforms the CDC events in real time.
+3. The output is written to a lakehouse table managed by Amoro.
+4. Other engines can then query the table.
+
+For step-by-step examples of ingesting CDC data into Iceberg and Mixed-Iceberg format tables, see the [Flink CDC ingestion guide](/engines/flink/flink-cdc-ingestion).
+
+<Tip>
+  Mixed-Iceberg format is optimized for streaming workloads. It can be understood as "streaming Iceberg" — a format that enhances real-time processing by separating the ChangeStore (streaming writes) from the BaseStore (batch reads).
+</Tip>
+
+## Debezium
+
+[Debezium](https://debezium.io/) is an open source distributed platform for change data capture. Point it at your databases, and your applications can respond to every insert, update, and delete committed by other applications. Debezium is durable and fault-tolerant — your apps will never miss an event, even when things go wrong.
+
+Debezium is commonly used as the CDC source connector within Flink CDC pipelines when reading from databases like MySQL, PostgreSQL, MongoDB, and others.
+
+<Note>
+  For CDC ingestion using Debezium within a Flink pipeline, see the [Flink CDC ingestion guide](/engines/flink/flink-cdc-ingestion).
+</Note>
+
+## Airbyte
+
+[Airbyte](https://airbyte.com/) is a data integration platform for building ELT pipelines from APIs, databases, and files to databases, data warehouses, and data lakes.
+
+<Note>
+  For Airbyte-based ingestion into Amoro tables, write transformed data from Airbyte destinations into Flink or Spark, then route to an Amoro catalog.
+</Note>

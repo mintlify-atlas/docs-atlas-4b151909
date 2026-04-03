@@ -1,0 +1,137 @@
+---
+title: "Metrics"
+description: "Monitor Amoro Management Service and table optimization health with built-in metrics."
+---
+
+Amoro includes a metrics system to measure the behavior of table management processes — for example, how long it has been since a table last ran self-optimizing, or how much memory an optimizer group is currently using.
+
+## Metric types
+
+Amoro provides two metric types:
+
+- **Gauge** — Provides a point-in-time value of any type.
+- **Counter** — Tracks a cumulative count by incrementing or decrementing.
+
+Every metric is tagged with dimensional labels (such as `catalog`, `database`, `table`, or `group`) so you can filter and aggregate results in your monitoring system.
+
+## Prometheus integration
+
+Amoro ships a Prometheus exporter plugin. To enable it, edit `conf/plugins/metric-reporters.yaml`:
+
+```yaml
+metric-reporters:
+  - name: prometheus-exporter
+    enabled: true
+    properties:
+      port: 7001
+      # Optional: filter metrics by regex
+      # metric-filter.includes: "table_optimizing_.*|optimizer_group_.*"
+      # metric-filter.excludes: "table_summary_.*"
+```
+
+Once enabled, Prometheus can scrape metrics at `http://<ams-host>:7001/metrics`.
+
+The `metric-filter.includes` and `metric-filter.excludes` properties accept regular expressions. When both are set, a metric must match the include pattern and not match the exclude pattern to be reported.
+
+## Self-optimizing metrics
+
+These metrics track the status and history of table self-optimizing processes.
+
+Tags: `catalog`, `database`, `table`, `group`
+
+| Metric name | Type | Description |
+|-------------|------|-------------|
+| `table_optimizing_status_idle_duration_mills` | Gauge | Duration in milliseconds the table has been in idle status. |
+| `table_optimizing_status_pending_duration_mills` | Gauge | Duration in milliseconds the table has been in pending status. |
+| `table_optimizing_status_planning_duration_mills` | Gauge | Duration in milliseconds the table has been in planning status. |
+| `table_optimizing_status_executing_duration_mills` | Gauge | Duration in milliseconds the table has been in executing status. |
+| `table_optimizing_status_committing_duration_mills` | Gauge | Duration in milliseconds the table has been in committing status. |
+| `table_optimizing_process_total_count` | Counter | Count of all optimizing processes since AMS started. |
+| `table_optimizing_process_failed_count` | Counter | Count of failed optimizing processes since AMS started. |
+| `table_optimizing_minor_total_count` | Counter | Count of minor optimizing processes since AMS started. |
+| `table_optimizing_minor_failed_count` | Counter | Count of failed minor optimizing processes since AMS started. |
+| `table_optimizing_major_total_count` | Counter | Count of major optimizing processes since AMS started. |
+| `table_optimizing_major_failed_count` | Counter | Count of failed major optimizing processes since AMS started. |
+| `table_optimizing_full_total_count` | Counter | Count of full optimizing processes since AMS started. |
+| `table_optimizing_full_failed_count` | Counter | Count of failed full optimizing processes since AMS started. |
+| `table_optimizing_status_in_idle` | Gauge | `1` if the table is currently in idle status, `0` otherwise. |
+| `table_optimizing_status_in_pending` | Gauge | `1` if the table is currently in pending status, `0` otherwise. |
+| `table_optimizing_status_in_planning` | Gauge | `1` if the table is currently in planning status, `0` otherwise. |
+| `table_optimizing_status_in_executing` | Gauge | `1` if the table is currently in executing status, `0` otherwise. |
+| `table_optimizing_status_in_committing` | Gauge | `1` if the table is currently in committing status, `0` otherwise. |
+| `table_optimizing_since_last_minor_optimization_mills` | Gauge | Duration in milliseconds since the last successful minor optimization. |
+| `table_optimizing_since_last_major_optimization_mills` | Gauge | Duration in milliseconds since the last successful major optimization. |
+| `table_optimizing_since_last_full_optimization_mills` | Gauge | Duration in milliseconds since the last successful full optimization. |
+| `table_optimizing_since_last_optimization_mills` | Gauge | Duration in milliseconds since the last successful optimization of any type. |
+| `table_optimizing_lag_duration_mills` | Gauge | Duration in milliseconds between the last self-optimizing snapshot and the most recently refreshed snapshot. |
+
+## Optimizer group metrics
+
+These metrics track the resource utilization and workload of each optimizer group.
+
+Tags: `group`
+
+| Metric name | Type | Description |
+|-------------|------|-------------|
+| `optimizer_group_pending_tasks` | Gauge | Number of pending tasks in the optimizer group. |
+| `optimizer_group_executing_tasks` | Gauge | Number of executing tasks in the optimizer group. |
+| `optimizer_group_planing_tables` | Gauge | Number of tables currently in the planning state. |
+| `optimizer_group_pending_tables` | Gauge | Number of tables currently in the pending state. |
+| `optimizer_group_executing_tables` | Gauge | Number of tables currently being optimized. |
+| `optimizer_group_idle_tables` | Gauge | Number of idle tables in the optimizer group. |
+| `optimizer_group_committing_tables` | Gauge | Number of tables currently committing an optimization. |
+| `optimizer_group_optimizer_instances` | Gauge | Number of optimizer instances running in the group. |
+| `optimizer_group_memory_bytes_allocated` | Gauge | Total memory bytes allocated to the optimizer group. |
+| `optimizer_group_threads` | Gauge | Total number of threads in the optimizer group. |
+
+## Orphan file cleaning metrics
+
+These metrics track orphan file cleanup activity.
+
+Tags: `catalog`, `database`, `table`
+
+| Metric name | Type | Description |
+|-------------|------|-------------|
+| `table_orphan_content_file_cleaning_count` | Counter | Count of orphan content files cleaned since AMS started. |
+| `table_orphan_metadata_file_cleaning_count` | Counter | Count of orphan metadata files cleaned since AMS started. |
+| `table_expected_orphan_content_file_cleaning_count` | Counter | Expected count of orphan content files to be cleaned since AMS started. |
+| `table_expected_orphan_metadata_file_cleaning_count` | Counter | Expected count of orphan metadata files to be cleaned since AMS started. |
+
+## AMS service metrics
+
+These metrics expose JVM health for the AMS process itself.
+
+| Metric name | Type | Tags | Description |
+|-------------|------|------|-------------|
+| `ams_jvm_cpu_load` | Gauge | — | Recent CPU usage of the AMS process. |
+| `ams_jvm_cpu_time` | Gauge | — | CPU time used by the AMS process. |
+| `ams_jvm_memory_heap_used` | Gauge | — | Heap memory currently used by AMS, in bytes. |
+| `ams_jvm_memory_heap_committed` | Gauge | — | Heap memory committed for JVM use, in bytes. |
+| `ams_jvm_memory_heap_max` | Gauge | — | Maximum heap memory set by `-Xmx`, in bytes. |
+| `ams_jvm_threads_count` | Gauge | — | Total number of live threads used by AMS. |
+| `ams_jvm_garbage_collector_count` | Gauge | `garbage_collector` | GC invocation count (e.g. for G1 Young). |
+| `ams_jvm_garbage_collector_time` | Gauge | `garbage_collector` | Time spent in GC (e.g. for G1 Young). |
+
+## Table summary metrics
+
+These metrics summarize the storage and health state of each table.
+
+Tags: `catalog`, `database`, `table`
+
+| Metric name | Type | Description |
+|-------------|------|-------------|
+| `table_summary_total_files` | Gauge | Total number of files in the table. |
+| `table_summary_data_files` | Gauge | Number of data files in the table. |
+| `table_summary_equality_delete_files` | Gauge | Number of equality delete files in the table. |
+| `table_summary_position_delete_files` | Gauge | Number of position delete files in the table. |
+| `table_summary_dangling_delete_files` | Gauge | Number of dangling delete files in the table. |
+| `table_summary_total_files_size` | Gauge | Total size of all files in the table. |
+| `table_summary_data_files_size` | Gauge | Total size of data files in the table. |
+| `table_summary_equality_delete_files_size` | Gauge | Total size of equality delete files in the table. |
+| `table_summary_position_delete_files_size` | Gauge | Total size of position delete files in the table. |
+| `table_summary_total_records` | Gauge | Total records in the table. |
+| `table_summary_data_files_records` | Gauge | Records from data files. |
+| `table_summary_equality_delete_files_records` | Gauge | Records from equality delete files. |
+| `table_summary_position_delete_files_records` | Gauge | Records from position delete files. |
+| `table_summary_snapshots` | Gauge | Number of snapshots in the table. |
+| `table_summary_health_score` | Gauge | Health score of the table. |

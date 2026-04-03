@@ -1,0 +1,89 @@
+---
+title: "Iceberg Format"
+description: "Use Apache Iceberg tables with Amoro for self-optimizing, metadata management, and unified catalog access."
+---
+
+## What is Iceberg format in Amoro?
+
+Iceberg format in Amoro refers to native [Apache Iceberg](https://iceberg.apache.org) tables managed through Amoro. Iceberg is an open table format for large analytical datasets that provides:
+
+- **ACID transactions** and multi-version concurrency control
+- **Schema evolution** without rewriting data
+- **Hidden partitioning** and partition evolution
+- **Data skipping** through statistics in manifest files
+
+With the Iceberg v2 specification, Iceberg also addresses row-level updates through a Merge-on-Read (MOR) mechanism, which better supports streaming update workloads. However, as data and delete files accumulate, read performance degrades over time — making timely maintenance essential.
+
+## How Amoro enhances Iceberg tables
+
+When you register an Iceberg catalog in Amoro, Amoro takes over ongoing maintenance of your tables with no intrusive changes to Iceberg's functionality or your existing engine integrations.
+
+Amoro maintains Iceberg table performance and availability through:
+
+- **Small file merging** — combines many small data files into larger, more efficient files
+- **Equality-delete to positional-delete conversion** — rewrites eq-delete files as pos-delete files, which are cheaper to apply at read time
+- **Duplicate data elimination** — removes redundant rows introduced by upsert-style writes
+- **Expired snapshot and orphan file cleanup** — reclaims storage from files no longer referenced by any snapshot
+
+<Note>
+  Amoro performs all optimizing operations with minimal impact on concurrent reads and writes. The self-optimizing process never blocks table access.
+</Note>
+
+## Engine compatibility
+
+Iceberg format is accessed through Iceberg's own engine connectors. Amoro manages the catalog and self-optimizing; the engine integrations are provided entirely by the Iceberg project.
+
+| Engine | Supported versions | Notes |
+|---|---|---|
+| Apache Flink | 1.15 and later | Use the Iceberg Flink connector |
+| Apache Spark | 3.x | Use the Iceberg Spark runtime |
+| Trino | 420 and later | Use the Iceberg Trino connector |
+| Hive | 2.x, 3.x | Use Iceberg's Hive catalog integration |
+
+<Note>
+  For the full feature set of each engine integration, use Iceberg's native connectors directly. Amoro registers your Iceberg catalog transparently, so all Iceberg connector features remain available.
+</Note>
+
+## Catalog and storage support
+
+Amoro supports all catalog types that Iceberg supports, including:
+
+- Hadoop, Hive, Glue, JDBC, Nessie, Snowflake
+
+Amoro supports all storage backends that Iceberg supports, including:
+
+- HDFS, S3, Alibaba Cloud OSS, Google Cloud Storage, EMC ECS
+
+## Key capabilities and limitations
+
+**Capabilities:**
+
+- Full Iceberg v1 and v2 table support (available since Amoro v0.4)
+- Full upward and downward Iceberg version compatibility — you do not need to match the Iceberg version of your engine client to the version Amoro depends on
+- No schema or API changes — existing queries and pipelines continue to work without modification
+
+**Limitations:**
+
+- No primary key constraints — row-level upserts rely on Iceberg v2 MOR semantics rather than enforced uniqueness
+- CDC incremental reads are not natively supported — use [Mixed-Iceberg](/formats/mixed-iceberg) if you need a guaranteed-ordered CDC stream from your table
+- Without timely self-optimizing, read performance can degrade as delete files accumulate
+
+## When to use Iceberg vs Mixed-Iceberg
+
+Use **Iceberg format** when:
+
+- You already have Iceberg tables and want to add self-optimizing without changing anything
+- You need maximum compatibility with the Iceberg ecosystem (engines, catalogs, tools)
+- You do not require enforced primary key uniqueness or CDC incremental reads
+
+Use **[Mixed-Iceberg format](/formats/mixed-iceberg)** when:
+
+- You need primary key constraints enforced across all engines
+- You are building a real-time data warehouse with latency requirements below the minute level
+- You need CDC incremental reads from the ChangeStore
+
+## Getting started
+
+To use Iceberg format with Amoro, register your Iceberg catalog in the Amoro Management Service (AMS). See [Managing Catalogs](/admin-guides/managing-catalogs) for detailed steps.
+
+Once your catalog is registered, Amoro begins self-optimizing your tables automatically according to the configured optimizer group.

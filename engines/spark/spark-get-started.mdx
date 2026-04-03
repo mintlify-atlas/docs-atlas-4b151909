@@ -1,0 +1,161 @@
+---
+title: "Spark — Get Started"
+description: "Set up the Amoro Spark connector to read and write Mixed-format tables using Apache Spark."
+---
+
+The Amoro Mixed-format Spark connector lets you create, query, and modify Mixed-format tables (`mixed_iceberg` and `mixed_hive`) directly from Apache Spark SQL and the DataFrame API. This page covers installation, catalog registration, and a first read/write example.
+
+<Note>
+For **Iceberg Format** tables, use the connector provided by the Iceberg project. See the [Iceberg Spark connector docs](https://iceberg.apache.org/docs/latest/getting-started/).
+
+For **Paimon Format** tables, use the connector provided by the Paimon project. See the [Paimon Spark connector docs](https://paimon.apache.org/docs/master/engines/spark3/).
+</Note>
+
+## Supported versions
+
+The Mixed-format connector ships a separate runtime JAR for each supported Spark version.
+
+| Spark version | Runtime artifact |
+|---|---|
+| 3.3 | `amoro-format-mixed-spark-runtime-3.3_2.12` |
+| 3.4 | `amoro-format-mixed-spark-runtime-3.4_2.12` |
+| 3.5 | `amoro-format-mixed-spark-runtime-3.5_2.12` |
+
+## Adding the runtime JAR
+
+<Tabs>
+  <Tab title="Build from source">
+    Build the runtime JAR for your Spark version using Maven (replace `3.3` as needed):
+
+    ```bash
+    ./mvnw clean package -pl 'amoro-format-mixed/amoro-mixed-spark/v3.3/amoro-mixed-spark-runtime-3.3' -am -DskipTests
+    ```
+
+    The compiled JAR is located at:
+
+    ```
+    amoro-format-mixed/amoro-mixed-spark/v3.3/amoro-mixed-spark-runtime-3.3/target/amoro-format-mixed-spark-runtime-3.3_2.12-{version}.jar
+    ```
+
+    Copy it to Spark's `jars/` directory:
+
+    ```bash
+    cp amoro-format-mixed-spark-runtime-3.3_2.12-{version}.jar $SPARK_HOME/jars/
+    ```
+  </Tab>
+  <Tab title="Maven (JAR job)">
+    Add the runtime JAR as a dependency in your project's `pom.xml`:
+
+    ```xml
+    <dependency>
+        <groupId>org.apache.amoro</groupId>
+        <artifactId>amoro-format-mixed-spark-runtime-3.3_2.12</artifactId>
+        <version>{version}</version>
+    </dependency>
+    ```
+  </Tab>
+</Tabs>
+
+## Registering a catalog
+
+Amoro manages catalogs through AMS (Amoro Management Service). A Spark catalog is mapped to an Amoro catalog via a Thrift URI in the format `thrift://${AMS_HOST}:${AMS_PORT}/${AMS_CATALOG_NAME}`.
+
+<Info>
+The default AMS Thrift port is **1260**. The connector automatically downloads the Hadoop site configuration file over Thrift so it can reach your HDFS cluster.
+</Info>
+
+<Steps>
+  <Step title="Start spark-sql with catalog configuration">
+    ```bash
+    ${SPARK_HOME}/bin/spark-sql \
+        --conf spark.sql.extensions=org.apache.amoro.spark.MixedFormatSparkExtensions \
+        --conf spark.sql.catalog.local_catalog=org.apache.amoro.spark.MixedFormatSparkCatalog \
+        --conf spark.sql.catalog.local_catalog.ams.uri=thrift://${AMS_HOST}:${AMS_PORT}/${AMS_CATALOG_NAME}
+    ```
+  </Step>
+  <Step title="Switch to the catalog">
+    ```sql
+    USE local_catalog;
+    ```
+  </Step>
+  <Step title="Create a database">
+    ```sql
+    CREATE DATABASE IF NOT EXISTS test_db;
+    USE test_db;
+    ```
+  </Step>
+</Steps>
+
+For all Spark configuration options, see [Spark Configuration](/engines/spark/spark-conf).
+
+## Creating a table
+
+With the catalog active, create Mixed-format tables using `USING mixed_iceberg` (or `USING mixed_hive` for Hive-compatible tables):
+
+```sql
+-- simple table, three columns
+CREATE TABLE test1 (id INT, data STRING, ts TIMESTAMP) USING mixed_iceberg;
+
+-- table with a hidden partition
+CREATE TABLE test2 (id INT, data STRING, ts TIMESTAMP)
+USING mixed_iceberg
+PARTITIONED BY (days(ts));
+
+-- table with a hidden partition and a primary key
+CREATE TABLE test3 (id INT, data STRING, ts TIMESTAMP, PRIMARY KEY (id))
+USING mixed_iceberg
+PARTITIONED BY (days(ts));
+```
+
+For the full DDL reference, see [Spark DDL](/engines/spark/spark-ddl).
+
+## Writing to a table
+
+<Tabs>
+  <Tab title="SQL — INSERT INTO">
+    ```sql
+    INSERT INTO test2 VALUES
+      (1, 'aaa', TIMESTAMP('2022-1-1 00:00:00')),
+      (2, 'bbb', TIMESTAMP('2022-1-2 00:00:00')),
+      (3, 'bbb', TIMESTAMP('2022-1-3 00:00:00'));
+    ```
+  </Tab>
+  <Tab title="SQL — INSERT OVERWRITE">
+    ```sql
+    INSERT OVERWRITE test3 VALUES
+      (1, 'aaa', TIMESTAMP('2022-1-1 00:00:00')),
+      (2, 'bbb', TIMESTAMP('2022-1-2 00:00:00')),
+      (3, 'bbb', TIMESTAMP('2022-1-3 00:00:00'));
+    ```
+
+    <Warning>
+    Static overwrite (the Spark default) does not support partition transforms. Switch to dynamic overwrite with `SET spark.sql.sources.partitionOverwriteMode=dynamic` if your partition spec uses transforms.
+    </Warning>
+  </Tab>
+  <Tab title="DataFrame API">
+    ```scala
+    val df = spark.read.load("/path-to-source")
+    df.writeTo("test_db.test2").overwritePartitions()
+    ```
+  </Tab>
+</Tabs>
+
+For more write operations, see [Spark Writes](/engines/spark/spark-writes).
+
+## Reading from a table
+
+```sql
+SELECT COUNT(1) AS count, data
+FROM test2
+GROUP BY data;
+```
+
+For tables with a primary key, you can query the raw change log via `.change`:
+
+```sql
+SELECT COUNT(1) AS count, data
+FROM test_db.test3.change
+GROUP BY data;
+```
+
+For more query patterns, see [Spark Queries](/engines/spark/spark-queries).

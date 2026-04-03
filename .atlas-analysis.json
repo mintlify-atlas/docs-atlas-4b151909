@@ -1,0 +1,112 @@
+{
+  "projectType": "data-platform",
+  "projectName": "Apache Amoro",
+  "projectDescription": "A Lakehouse management system built on open data lake formats (Iceberg, Hudi, Paimon, Mixed) that provides self-optimizing, catalog services, and unified management for Flink, Spark, and Trino compute engines.",
+  "theme": "aspen",
+  "primaryColor": "#2b73fa",
+  "lightColor": "#0435a1",
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "concepts/catalogs",
+              "concepts/self-optimizing"
+            ]
+          },
+          {
+            "group": "Table Formats",
+            "pages": [
+              "formats/overview",
+              "formats/iceberg",
+              "formats/mixed-iceberg",
+              "formats/mixed-hive",
+              "formats/paimon"
+            ]
+          },
+          {
+            "group": "Admin Guide",
+            "pages": [
+              "admin-guides/deployment",
+              "admin-guides/deployment-on-kubernetes",
+              "admin-guides/managing-catalogs",
+              "admin-guides/managing-optimizers"
+            ]
+          },
+          {
+            "group": "User Guide",
+            "pages": [
+              "user-guides/using-tables",
+              "user-guides/configurations",
+              "user-guides/cdc-ingestion",
+              "user-guides/metrics",
+              "user-guides/rest-api"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Engine Integration",
+        "groups": [
+          {
+            "group": "Apache Flink",
+            "pages": [
+              "engines/flink/flink-get-started",
+              "engines/flink/flink-ddl",
+              "engines/flink/flink-dml",
+              "engines/flink/flink-cdc-ingestion",
+              "engines/flink/using-logstore"
+            ]
+          },
+          {
+            "group": "Apache Spark",
+            "pages": [
+              "engines/spark/spark-get-started",
+              "engines/spark/spark-ddl",
+              "engines/spark/spark-writes",
+              "engines/spark/spark-queries",
+              "engines/spark/spark-conf"
+            ]
+          },
+          {
+            "group": "Trino",
+            "pages": [
+              "engines/trino"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Self-optimizing: Continuous background file compaction, deduplication, and layout optimization with minor/major/full optimizing types",
+    "Multi-format support: Native Iceberg, Mixed-Iceberg, Mixed-Hive, and Paimon table formats",
+    "Unified catalog service: Centralized metadata management compatible with Hive Metastore and AWS Glue",
+    "Multi-engine integration: Full support for Flink, Spark, and Trino compute engines",
+    "Resource management: Optimizer groups with quota-based and balanced scheduling policies",
+    "Dashboard UI: Web-based management interface for catalogs, tables, and optimizers",
+    "REST API: OpenAPI-compliant HTTP API for programmatic access to AMS features",
+    "Plugin system: Extensible architecture for metric reporters, event listeners, and custom integrations",
+    "High availability: ZooKeeper-based leader election for production deployments",
+    "Kubernetes deployment: Helm charts for cloud-native Lakehouse management"
+  ],
+  "publicApiSurface": [
+    "REST API: /api/ams/v1/* — catalog, table, optimizer, and metrics endpoints",
+    "Thrift API: TableMetastore service on port 1260 (compute engine catalog integration)",
+    "Thrift API: OptimizingService on port 1261 (optimizer communication)",
+    "FormatCatalogFactory SPI — plug in custom table format support",
+    "SparkTableFormat SPI — custom Spark catalog integration",
+    "ProcessFactory SPI — custom optimizing process implementations",
+    "MetricReporter plugin — integrate with external monitoring systems (e.g., Prometheus)",
+    "PasswdAuthenticationProvider — custom REST API authentication",
+    "TokenAuthenticationProvider — custom JWT authentication provider",
+    "AmoroTable Java API — programmatic table metadata access",
+    "OpenAPI SDK — generated client library from openapi.yaml spec"
+  ]
+}

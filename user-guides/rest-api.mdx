@@ -1,0 +1,193 @@
+---
+title: "REST API"
+description: "Use the Amoro REST API to programmatically manage catalogs, tables, and optimizers."
+---
+
+Amoro exposes a REST API under the base path `/api/ams/v1`. All responses follow a common envelope format with `code`, `message`, and `result` fields.
+
+## Base URL
+
+```text
+http://<host>:<port>/api/ams/v1
+```
+
+By default, AMS runs on port `1630`.
+
+## Swagger UI
+
+A built-in Swagger UI is available at:
+
+```text
+http://<host>:<port>/#/openapi-ui
+```
+
+You can also explore the API without a running instance using the [Swagger Editor](https://editor-next.swagger.io/?url=https://raw.githubusercontent.com/apache/amoro/master/amoro-ams/src/main/resources/openapi/openapi.yaml) online with the OpenAPI specification from the repository at `amoro-ams/src/main/resources/openapi/openapi.yaml`.
+
+## Authentication
+
+The API supports three authentication methods:
+
+<AccordionGroup>
+  <Accordion title="API key (query parameter)">
+    Pass your API key as a query parameter named `apikey`:
+
+    ```bash
+    curl "http://localhost:1630/api/ams/v1/catalogs?apikey=<your-api-key>"
+    ```
+  </Accordion>
+  <Accordion title="Signature (query parameter)">
+    Pass a request signature as a query parameter named `signature`:
+
+    ```bash
+    curl "http://localhost:1630/api/ams/v1/catalogs?signature=<your-signature>"
+    ```
+  </Accordion>
+  <Accordion title="Basic authentication">
+    Pass credentials using HTTP Basic Auth:
+
+    ```bash
+    curl -u admin:admin "http://localhost:1630/api/ams/v1/catalogs"
+    ```
+
+    The default AMS credentials are `admin` / `admin`.
+  </Accordion>
+</AccordionGroup>
+
+## Build the OpenAPI SDK
+
+You can generate a typed client SDK from the OpenAPI specification using Maven:
+
+```bash
+./mvnw clean package -pl amoro-openapi-sdk -am -Popenapi-sdk
+```
+
+The generated SDK is built into the `amoro-openapi-sdk` module and can be used as a dependency in your Java projects.
+
+## API endpoint groups
+
+<CardGroup cols={2}>
+  <Card title="Catalogs" icon="database">
+    List, register, update, and delete catalogs. Retrieve catalog configuration files and check deletion prerequisites.
+  </Card>
+  <Card title="Optimize" icon="bolt">
+    Manage optimizer groups and resource groups. Scale optimizers in or out, and release optimizer instances by job ID.
+  </Card>
+  <Card title="Overview" icon="chart-bar">
+    Retrieve resource usage history, data size history, top tables by size or file count, a summary of the overall system state, and the current optimizing status.
+  </Card>
+  <Card title="Settings" icon="gear">
+    Read system settings and container settings.
+  </Card>
+  <Card title="Login" icon="key">
+    Authenticate users, retrieve current session information, and log out.
+  </Card>
+  <Card title="Health" icon="heart-pulse">
+    Perform a health check against the AMS service.
+  </Card>
+</CardGroup>
+
+## Example requests
+
+### List all catalogs
+
+```bash
+curl -u admin:admin \
+  http://localhost:1630/api/ams/v1/catalogs
+```
+
+### Register a catalog
+
+```bash
+curl -u admin:admin \
+  -X POST http://localhost:1630/api/ams/v1/catalogs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "my_catalog",
+    "type": "ams",
+    "tableFormatList": ["ICEBERG"],
+    "properties": {},
+    "storageConfig": {},
+    "authConfig": {},
+    "tableProperties": {}
+  }'
+```
+
+### Get details for a specific catalog
+
+```bash
+curl -u admin:admin \
+  http://localhost:1630/api/ams/v1/catalogs/my_catalog
+```
+
+### Delete a catalog
+
+```bash
+# First, check if the catalog can be deleted
+curl -u admin:admin \
+  http://localhost:1630/api/ams/v1/catalogs/my_catalog/delete/check
+
+# Then delete it
+curl -u admin:admin \
+  -X DELETE http://localhost:1630/api/ams/v1/catalogs/my_catalog
+```
+
+### List optimizer groups
+
+```bash
+curl -u admin:admin \
+  http://localhost:1630/api/ams/v1/optimize/optimizerGroups
+```
+
+### Scale out optimizers in a group
+
+```bash
+curl -u admin:admin \
+  -X POST http://localhost:1630/api/ams/v1/optimize/optimizerGroups/default/optimizers \
+  -H "Content-Type: application/json" \
+  -d '{"parallelism": 2}'
+```
+
+### Release an optimizer by job ID
+
+```bash
+curl -u admin:admin \
+  -X DELETE http://localhost:1630/api/ams/v1/optimize/optimizers/<jobId>
+```
+
+### Health check
+
+```bash
+curl http://localhost:1630/api/ams/v1/health/status
+```
+
+### Get overview summary
+
+```bash
+curl -u admin:admin \
+  http://localhost:1630/api/ams/v1/overview/summary
+```
+
+### Get top tables by size
+
+```bash
+curl -u admin:admin \
+  "http://localhost:1630/api/ams/v1/overview/top?order=desc&orderBy=tableSize&limit=10"
+```
+
+## Response format
+
+All API responses use a common envelope:
+
+```json
+{
+  "code": 200,
+  "message": "success",
+  "result": { ... }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `code` | integer | HTTP-style status code. |
+| `message` | string | Human-readable status message. |
+| `result` | object or array | The response payload. Shape varies by endpoint. |

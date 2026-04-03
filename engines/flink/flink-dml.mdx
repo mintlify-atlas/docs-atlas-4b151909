@@ -1,0 +1,481 @@
+---
+title: "Flink DML"
+description: "Read and write data in Amoro Mixed-format tables using Flink SQL DML operations."
+---
+
+## Querying with SQL
+
+Amoro tables support reading data in stream or batch mode through Flink SQL. Switch modes with:
+
+```sql
+-- Run Flink tasks in streaming mode
+SET execution.runtime-mode = streaming;
+
+-- Run Flink tasks in batch mode
+SET execution.runtime-mode = batch;
+```
+
+Enable dynamic table option overrides for hint syntax:
+
+```sql
+SET table.dynamic-table-options.enabled = true;
+```
+
+---
+
+## Batch reads
+
+Use batch mode to read full and incremental data from FileStore.
+
+<Note>
+LogStore does not support bounded (batch) reads.
+</Note>
+
+### Non-primary key tables
+
+Non-primary key tables support reading full data, a specific snapshot, or incremental data between two snapshots.
+
+```sql
+SET execution.runtime-mode = batch;
+SET table.dynamic-table-options.enabled = true;
+
+-- Read full data
+SELECT * FROM unkeyed /*+ OPTIONS('streaming'='false') */;
+
+-- Read a specific snapshot by ID
+SELECT * FROM unkeyed /*+ OPTIONS('snapshot-id'='4411985347497777546') */;
+```
+
+Supported hint options for bounded reads of non-primary-key tables:
+
+| Key | Default | Type | Required | Description |
+|-----|---------|------|----------|-------------|
+| `snapshot-id` | (none) | Long | No | Read the full data of a specific snapshot. Only effective when `streaming=false`. |
+| `as-of-timestamp` | (none) | Long | No | Read the latest snapshot taken before the specified timestamp (ms). Only effective when `streaming=false`. |
+| `start-snapshot-id` | (none) | Long | No | When `streaming=false`, combine with `end-snapshot-id` to read incremental data in `(snapshot1, snapshot2]`. When `streaming=true`, read incremental data after the specified snapshot. |
+| `end-snapshot-id` | (none) | Long | No | Combine with `start-snapshot-id` to read incremental data in `(snapshot1, snapshot2]`. |
+
+### Primary key tables
+
+```sql
+-- Merge-on-Read: return the current merged view of the table
+SELECT * FROM keyed /*+ OPTIONS('streaming'='false', 'scan.startup.mode'='earliest') */;
+```
+
+---
+
+## Streaming reads
+
+Amoro supports reading incremental data from FileStore or LogStore in streaming mode.
+
+### From LogStore
+
+```sql
+SET execution.runtime-mode = streaming;
+SET table.dynamic-table-options.enabled = true;
+
+SELECT * FROM test_table /*+ OPTIONS('mixed-format.read.mode'='log') */;
+```
+
+Supported hint options for LogStore streaming reads:
+
+| Key | Default | Type | Required | Description |
+|-----|---------|------|----------|-------------|
+| `mixed-format.read.mode` | `file` | String | No | Data source: `file` or `log`. Set to `log` to read from LogStore (must be enabled). |
+| `scan.startup.mode` | `latest` | String | No | `earliest`, `latest`, `timestamp`, `group-offsets`, `specific-offsets`. |
+| `scan.startup.timestamp-millis` | (none) | Long | No | Start timestamp in ms. Required when `scan.startup.mode=timestamp`. |
+| `scan.startup.specific-offsets` | (none) | String | No | Per-partition offsets, e.g. `partition:0,offset:42;partition:1,offset:300`. Required when `scan.startup.mode=specific-offsets`. |
+| `properties.group.id` | (none) | String | Required if LogStore is Kafka | Consumer group ID for Kafka. |
+| `properties.pulsar.admin.adminUrl` | (none) | String | Required if LogStore is Pulsar | Pulsar admin HTTP URL, e.g. `http://my-broker.example.com:8080`. |
+| `log.consumer.changelog.modes` | `all-kinds` | String | No | RowKind filter: `all-kinds` (reads `+I/-D/-U/+U`), `append-only` (inserts only). |
+| `properties.*` | (none) | String | No | Pass-through Kafka consumer or Pulsar client properties, e.g. `properties.batch.size=16384`. |
+
+<Warning>
+When `log-store.type=pulsar`, the Flink task parallelism must be at least equal to the number of Pulsar topic partitions. If topic partitions are fewer than the task parallelism, configure `table.exec.source.idle-timeout` to allow watermarks to advance past idle subtasks.
+</Warning>
+
+### From FileStore (non-primary key tables)
+
+```sql
+SET execution.runtime-mode = streaming;
+SET table.dynamic-table-options.enabled = true;
+
+-- Read incremental data after the current snapshot
+SELECT * FROM unkeyed /*+ OPTIONS('monitor-interval'='1s') */;
+```
+
+| Key | Default | Type | Required | Description |
+|-----|---------|------|----------|-------------|
+| `streaming` | `true` | Boolean | No | `false` for bounded reads, `true` for unbounded. |
+| `mixed-format.read.mode` | `file` | String | No | `file` or `log`. |
+| `monitor-interval` | `10s` | Duration | No | Polling interval for new data files. Only effective when `mixed-format.read.mode=file`. |
+| `start-snapshot-id` | (none) | Long | No | Read incremental data starting after this snapshot. If unset, starts after the current snapshot. |
+
+### From FileStore (primary key tables)
+
+After CDC ingestion, you can read both stock data and incremental data in a single Flink job without restarting. Amoro Source persists the file offset in Flink state so the job can resume from the last position after a restart.
+
+```sql
+SET execution.runtime-mode = streaming;
+SET table.dynamic-table-options.enabled = true;
+
+-- Read full history + all subsequent incremental changes
+SELECT * FROM keyed /*+ OPTIONS('streaming'='true', 'scan.startup.mode'='earliest') */;
+```
+
+| Key | Default | Type | Required | Description |
+|-----|---------|------|----------|-------------|
+| `streaming` | `true` | String | No | `false` for bounded reads, `true` for unbounded. |
+| `mixed-format.read.mode` | `file` | String | No | `file` or `log`. |
+| `monitor-interval` | `10s` | String | No | Polling interval for new data files. Only effective when `mixed-format.read.mode=file`. |
+| `scan.startup.mode` | `latest` | String | No | `earliest`: reads full table data and continues incrementally when `streaming=true`. `latest`: reads only data after the current snapshot. |
+
+---
+
+## Writing with SQL
+
+### INSERT OVERWRITE
+
+INSERT OVERWRITE replaces existing data atomically. Partitions are dynamically derived from the query. Only supported for **non-primary key tables** and must run in **batch mode**.
+
+```sql
+INSERT OVERWRITE unkeyed VALUES (1, 'a', '2022-07-01');
+```
+
+To overwrite a specific partition:
+
+```sql
+INSERT OVERWRITE `mixed_catalog`.`mixed_db`.`unkeyed`
+    PARTITION(data='2022-07-01')
+SELECT 5, 'b';
+```
+
+For non-partitioned tables, INSERT OVERWRITE replaces the entire table.
+
+### INSERT INTO
+
+For Amoro primary key tables, writing to FileStore also writes CDC data to the ChangeStore. You can control the write target using the `mixed-format.emit.mode` hint option:
+
+```sql
+INSERT INTO `mixed_catalog`.`mixed_db`.`test_table`
+    /*+ OPTIONS('mixed-format.emit.mode'='log,file') */
+SELECT id, name FROM source;
+```
+
+Supported hint options for writes:
+
+| Key | Default | Type | Required | Description |
+|-----|---------|------|----------|-------------|
+| `mixed-format.emit.mode` | `auto` | String | No | `file`: FileStore only. `log`: LogStore only. `file,log`: both. `auto`: FileStore only when LogStore is disabled; both when LogStore is enabled. Recommended: `auto`. |
+| `mixed-format.emit.auto-write-to-logstore.watermark-gap` | (none) | Duration | No | When `emit.mode=auto`, start writing to LogStore when the writer watermark is within this gap of the current system time. Must be greater than 0. |
+| `log.version` | `v1` | String | No | Log data format version. |
+| `sink.parallelism` | (none) | String | No | Parallelism for FileStore and LogStore writers (set separately). The file-commit operator always runs at parallelism 1. |
+| `write.distribution-mode` | `hash` | String | No | Data distribution before writing: `none` or `hash`. |
+| `write.distribution.hash-mode` | `auto` | String | No | Hash shuffle strategy. `primary-key`, `partition-key`, `primary-partition-key`, or `auto`. `auto` picks the best option based on the table's primary key and partition configuration. |
+| `properties.pulsar.admin.adminUrl` | (none) | String | Required if LogStore is Pulsar | Pulsar admin HTTP URL. |
+| `properties.*` | (none) | String | No | Pass-through Kafka producer or Pulsar client properties. |
+
+---
+
+## Lookup join
+
+A Lookup Join enriches a streaming table with data queried from an Amoro table. The Amoro table acts as the lookup dimension table, backed by a local RocksDB cache.
+
+```sql
+-- Dimension table backed by Amoro
+CREATE TEMPORARY TABLE Customers (
+    id      INT,
+    name    STRING,
+    country STRING,
+    zip     STRING
+) WITH (
+    'connector'            = 'mixed-format',
+    'ams.uri'              = 'thrift://<ip>:<port>/<catalog_name>',
+    'mixed-format.catalog' = '<catalog_name>',
+    'mixed-format.database'= '<database_name>',
+    'mixed-format.table'   = '<table_name>',
+    'lookup.cache.max-rows'= '10000'
+);
+
+-- Streaming source (e.g. Kafka orders)
+CREATE TEMPORARY TABLE orders (
+    order_id    INT,
+    total       INT,
+    customer_id INT,
+    proc_time   AS PROCTIME()
+) WITH (
+    'connector'                  = 'kafka',
+    'topic'                      = '...',
+    'properties.bootstrap.servers' = '...',
+    'format'                     = 'json'
+);
+
+-- Enrich each order with customer information
+SELECT o.order_id, o.total, c.country, c.zip
+FROM orders AS o
+JOIN Customers FOR SYSTEM_TIME AS OF o.proc_time AS c
+  ON o.customer_id = c.id;
+```
+
+Lookup options:
+
+| Key | Default | Type | Required | Description |
+|-----|---------|------|----------|-------------|
+| `lookup.cache.max-rows` | `10000` | Long | No | Maximum number of rows in the lookup cache. Oldest entry is evicted when this limit is exceeded. |
+| `lookup.reloading.interval` | `10s` | Duration | No | Interval to reload lookup data from the Amoro table into RocksDB. |
+| `lookup.cache.ttl-after-write` | `0s` | Duration | No | TTL for individual rows in the lookup cache. |
+| `rocksdb.auto-compactions` | `false` | Boolean | No | Enable automatic RocksDB compaction during initialization. |
+| `rocksdb.writing-threads` | `5` | Int | No | Number of threads writing data into RocksDB. |
+| `rocksdb.block-cache.capacity` | `1048576` | Long | No | LRU block cache size in bytes. |
+| `rocksdb.block-cache.numShardBits` | `-1` | Int | No | Number of shard bits for the LRU block cache. `-1` means auto-determined (min 512 KB per shard, max 6 bits). |
+
+---
+
+## DataStream API
+
+### Adding the Maven dependency
+
+```xml
+<dependencies>
+  <dependency>
+    <groupId>org.apache.amoro</groupId>
+    <!-- e.g. amoro-format-mixed-flink-runtime-1.18 -->
+    <artifactId>amoro-format-mixed-flink-runtime-${flink.minor-version}</artifactId>
+    <!-- e.g. 0.9.0-incubating -->
+    <version>${amoro-format-mixed-flink.version}</version>
+  </dependency>
+</dependencies>
+```
+
+### Reading with DataStream
+
+<Tabs>
+  <Tab title="Batch (FileStore)">
+
+```java
+import org.apache.amoro.flink.InternalCatalogBuilder;
+import org.apache.amoro.flink.table.FlinkSource;
+import org.apache.amoro.flink.table.MixedFormatTableLoader;
+import org.apache.amoro.table.TableIdentifier;
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.table.data.RowData;
+
+import java.util.HashMap;
+import java.util.Map;
+
+public class Main {
+    public static void main(String[] args) throws Exception {
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.createLocalEnvironment();
+        InternalCatalogBuilder catalogBuilder =
+                InternalCatalogBuilder
+                        .builder()
+                        .metastoreUrl("thrift://<url>:<port>/<catalog_name>");
+
+        TableIdentifier tableId = TableIdentifier.of("catalog_name", "database_name", "test_table");
+        MixedFormatTableLoader tableLoader = MixedFormatTableLoader.of(tableId, catalogBuilder);
+
+        Map<String, String> properties = new HashMap<>();
+        properties.put("streaming", "false"); // batch mode
+
+        DataStream<RowData> batch =
+                FlinkSource.forRowData()
+                        .env(env)
+                        .tableLoader(tableLoader)
+                        .properties(properties)
+                        .build();
+
+        batch.print();
+        env.execute("Test Mixed-format table batch read");
+    }
+}
+```
+
+  </Tab>
+  <Tab title="Streaming (LogStore)">
+
+```java
+import org.apache.amoro.flink.InternalCatalogBuilder;
+import org.apache.amoro.flink.read.source.log.kafka.LogKafkaSource;
+import org.apache.amoro.flink.table.MixedFormatTableLoader;
+import org.apache.amoro.flink.util.MixedFormatUtils;
+import org.apache.amoro.shade.org.apache.iceberg.Schema;
+import org.apache.amoro.table.MixedTable;
+import org.apache.amoro.table.TableIdentifier;
+import org.apache.flink.api.common.eventtime.WatermarkStrategy;
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.table.data.RowData;
+
+public class Main {
+    public static void main(String[] args) throws Exception {
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.createLocalEnvironment();
+        InternalCatalogBuilder catalogBuilder =
+                InternalCatalogBuilder
+                        .builder()
+                        .metastoreUrl("thrift://<url>:<port>/<catalog_name>");
+
+        TableIdentifier tableId = TableIdentifier.of("catalog_name", "database_name", "test_table");
+        MixedFormatTableLoader tableLoader = MixedFormatTableLoader.of(tableId, catalogBuilder);
+
+        MixedTable table = MixedFormatUtils.loadMixedTable(tableLoader);
+        Schema schema = table.schema();
+
+        LogKafkaSource source = LogKafkaSource.builder(schema, table.properties()).build();
+
+        DataStream<RowData> stream = env.fromSource(
+                source, WatermarkStrategy.noWatermarks(), "Log Source");
+
+        stream.print();
+        env.execute("Test Mixed-format table streaming read");
+    }
+}
+```
+
+  </Tab>
+  <Tab title="Streaming (FileStore)">
+
+```java
+import org.apache.amoro.flink.InternalCatalogBuilder;
+import org.apache.amoro.flink.table.FlinkSource;
+import org.apache.amoro.flink.table.MixedFormatTableLoader;
+import org.apache.amoro.table.TableIdentifier;
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.table.data.RowData;
+
+import java.util.HashMap;
+import java.util.Map;
+
+public class Main {
+    public static void main(String[] args) throws Exception {
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.createLocalEnvironment();
+        InternalCatalogBuilder catalogBuilder =
+                InternalCatalogBuilder
+                        .builder()
+                        .metastoreUrl("thrift://<url>:<port>/<catalog_name>");
+
+        TableIdentifier tableId = TableIdentifier.of("catalog_name", "database_name", "test_table");
+        MixedFormatTableLoader tableLoader = MixedFormatTableLoader.of(tableId, catalogBuilder);
+
+        Map<String, String> properties = new HashMap<>();
+        properties.put("streaming", "true");
+
+        DataStream<RowData> stream =
+                FlinkSource.forRowData()
+                        .env(env)
+                        .tableLoader(tableLoader)
+                        .properties(properties)
+                        .build();
+
+        stream.print();
+        env.execute("Test Mixed-format table streaming read");
+    }
+}
+```
+
+  </Tab>
+</Tabs>
+
+### Writing with DataStream
+
+<Tabs>
+  <Tab title="Overwrite (non-primary key tables)">
+
+```java
+import org.apache.amoro.flink.InternalCatalogBuilder;
+import org.apache.amoro.flink.table.MixedFormatTableLoader;
+import org.apache.amoro.flink.write.FlinkSink;
+import org.apache.amoro.table.TableIdentifier;
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.table.api.DataTypes;
+import org.apache.flink.table.api.TableSchema;
+import org.apache.flink.table.data.RowData;
+
+public class Main {
+    public static void main(String[] args) throws Exception {
+        DataStream<RowData> input = null; // build your input stream
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.createLocalEnvironment();
+        InternalCatalogBuilder catalogBuilder =
+                InternalCatalogBuilder
+                        .builder()
+                        .metastoreUrl("thrift://<url>:<port>/<catalog_name>");
+
+        TableIdentifier tableId = TableIdentifier.of("catalog_name", "database_name", "test_table");
+        MixedFormatTableLoader tableLoader = MixedFormatTableLoader.of(tableId, catalogBuilder);
+
+        TableSchema flinkSchema = TableSchema.builder()
+                .field("id", DataTypes.INT())
+                .field("name", DataTypes.STRING())
+                .field("op_time", DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE())
+                .build();
+
+        FlinkSink
+                .forRowData(input)
+                .tableLoader(tableLoader)
+                .overwrite(true)
+                .flinkSchema(flinkSchema)
+                .build();
+
+        env.execute("Test Mixed-format table overwrite");
+    }
+}
+```
+
+  </Tab>
+  <Tab title="Append (FileStore + LogStore)">
+
+```java
+import org.apache.amoro.flink.InternalCatalogBuilder;
+import org.apache.amoro.flink.table.MixedFormatTableLoader;
+import org.apache.amoro.flink.util.MixedFormatUtils;
+import org.apache.amoro.flink.write.FlinkSink;
+import org.apache.amoro.table.MixedTable;
+import org.apache.amoro.table.TableIdentifier;
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.table.api.DataTypes;
+import org.apache.flink.table.api.TableSchema;
+import org.apache.flink.table.data.RowData;
+
+public class Main {
+    public static void main(String[] args) throws Exception {
+        DataStream<RowData> input = null; // build your input stream
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.createLocalEnvironment();
+        InternalCatalogBuilder catalogBuilder =
+                InternalCatalogBuilder
+                        .builder()
+                        .metastoreUrl("thrift://<url>:<port>/<catalog_name>");
+
+        TableIdentifier tableId = TableIdentifier.of("catalog_name", "database_name", "test_table");
+        MixedFormatTableLoader tableLoader = MixedFormatTableLoader.of(tableId, catalogBuilder);
+
+        TableSchema flinkSchema = TableSchema.builder()
+                .field("id", DataTypes.INT())
+                .field("name", DataTypes.STRING())
+                .field("op_time", DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE())
+                .build();
+
+        MixedTable table = MixedFormatUtils.loadMixedTable(tableLoader);
+        // Write to both FileStore and LogStore
+        table.properties().put("mixed-format.emit.mode", "log,file");
+
+        FlinkSink
+                .forRowData(input)
+                .table(table)
+                .tableLoader(tableLoader)
+                .flinkSchema(flinkSchema)
+                .build();
+
+        env.execute("Test Mixed-format table append");
+    }
+}
+```
+
+<Note>
+When `mixed-format.emit.mode` includes `log`, you must enable LogStore on the table (`log-store.enabled=true`). When `file` is included, primary key tables write to ChangeStore; non-primary key tables write directly to BaseStore.
+</Note>
+
+  </Tab>
+</Tabs>

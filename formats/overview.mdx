@@ -1,0 +1,60 @@
+---
+title: "Table Formats Overview"
+description: "Amoro supports multiple open table formats — Iceberg, Mixed-Iceberg, Mixed-Hive, and Paimon — each optimized for different scenarios."
+---
+
+## What is a table format?
+
+Table format was first proposed by Iceberg and defines the relationship between tables and files. Any engine can query and retrieve data files according to the format specification.
+
+Modern formats like Iceberg, Delta, and Hudi go further by defining:
+
+- The relationship between tables and **snapshots**, and between snapshots and files.
+- Every write operation produces a new snapshot; every read operation is based on a snapshot.
+
+This snapshot model brings **MVCC**, **ACID transactions**, and multi-version capabilities to data lakes. In addition, Iceberg provides advanced features such as schema evolution, hidden partitioning, and data skipping.
+
+Amoro's design goal is to provide an out-of-the-box data lake management system. Internally, Amoro uses different table formats as storage engines — a pattern common in systems like MySQL and ClickHouse — so you can choose the format that best fits your workload.
+
+## Supported formats
+
+| Format | Primary keys | Streaming support | CDC incremental reads | Hive compatibility | Self-optimizing |
+|---|---|---|---|---|---|
+| **Iceberg** | No | Yes (v2 MOR) | No | Partial | Yes |
+| **Mixed-Iceberg** | Yes | Yes (LogStore) | Yes | No | Yes |
+| **Mixed-Hive** | Yes | Yes (LogStore) | Yes | Full | Yes |
+| **Paimon** | Yes (Paimon-native) | Yes (Paimon-native) | Yes (Paimon-native) | No | No (metadata only) |
+
+## Format pages
+
+<CardGroup cols={2}>
+  <Card title="Iceberg Format" icon="layer-group" href="/formats/iceberg">
+    Use native Apache Iceberg tables with Amoro self-optimizing and catalog management.
+  </Card>
+  <Card title="Mixed-Iceberg Format" icon="bolt" href="/formats/mixed-iceberg">
+    Accelerated streaming updates and CDC incremental reading built on top of Iceberg.
+  </Card>
+  <Card title="Mixed-Hive Format" icon="database" href="/formats/mixed-hive">
+    Upgrade Hive tables to lakehouse format while keeping full Hive read/write compatibility.
+  </Card>
+  <Card title="Paimon Format" icon="table" href="/formats/paimon">
+    Metadata visibility and management for Apache Paimon tables in the Amoro console.
+  </Card>
+</CardGroup>
+
+## Choosing the right format
+
+<AccordionGroup>
+  <Accordion title="I have existing Iceberg tables">
+    Use the **Iceberg format**. Register your Iceberg catalog in Amoro and immediately benefit from self-optimizing (small file merging, delete file compaction, data deduplication) with zero changes to your existing workloads or engine integrations.
+  </Accordion>
+  <Accordion title="I need real-time streaming updates with primary key semantics">
+    Use **Mixed-Iceberg format**. It adds primary key constraints, an auto-bucket mechanism for production-ready OLAP, and an optional LogStore tier that reduces data pipeline latency from minutes to milliseconds. Choose this when you are building a stream-batch integrated data warehouse on a clean Iceberg foundation.
+  </Accordion>
+  <Accordion title="I have existing Hive tables I cannot break">
+    Use **Mixed-Hive format**. You can upgrade a Hive table to Mixed-Hive in seconds through a metadata-only migration — no data rewriting required. After the upgrade, Hive readers and writers continue to work unchanged, while you gain primary key support, CDC reads, and Amoro self-optimizing.
+  </Accordion>
+  <Accordion title="I am already using Apache Paimon">
+    Use the **Paimon format**. Register your Paimon catalog with Amoro to view schema, options, files, snapshots, DDL history, and compaction information in the Amoro console. Engine-side reads and writes continue to use Paimon's own connectors.
+  </Accordion>
+</AccordionGroup>

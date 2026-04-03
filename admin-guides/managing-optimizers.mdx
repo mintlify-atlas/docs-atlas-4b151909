@@ -1,0 +1,354 @@
+---
+title: "Managing Optimizers"
+description: "Configure and manage optimizer containers and groups for table self-optimizing."
+---
+
+## Architecture
+
+Amoro's self-optimizing system is organized into three layers:
+
+<CardGroup cols={3}>
+  <Card title="Optimizer container" icon="box">
+    Encapsulates a deployment environment for optimizers. Implementations include local, Flink, Spark, Kubernetes, and external.
+  </Card>
+  <Card title="Optimizer group" icon="layer-group">
+    A named collection of optimizers sharing the same container. Each table selects one group; tables within a group share resources while tables in different groups are isolated.
+  </Card>
+  <Card title="Optimizer" icon="gear">
+    The execution unit that processes self-optimizing tasks, typically running with multiple parallel threads.
+  </Card>
+</CardGroup>
+
+## Optimizer containers
+
+Configure containers in `{AMORO_HOME}/conf/config.yaml` before starting self-optimizing. If you only plan to start optimizers manually (external mode), no container configuration is required—AMS creates an `external` container automatically.
+
+### Local container
+
+Starts optimizers as local JVM processes with multi-threaded execution. Recommended for demo or local development only.
+
+**Supported properties:**
+
+| Property | Required | Default | Description |
+|---|---|---|---|
+| `ams-optimizing-uri` | No | — | URI of the AMS Thrift optimizing endpoint. Use this if `ams.server-expose-host` is not reachable. |
+| `export.JAVA_HOME` | No | — | Java runtime location. |
+
+```yaml
+containers:
+  - name: localContainer
+    container-impl: org.apache.amoro.server.manager.LocalOptimizerContainer
+    properties:
+      export.JAVA_HOME: "/opt/java"   # JDK environment
+```
+
+The AMS optimizing URI format is `thrift://{host}:{port}?param1=value1&param2=value2`. Supported URI parameters:
+
+| Parameter | Default | Description |
+|---|---|---|
+| `autoReconnect` | `true` | Whether to reconnect when the connection is broken. |
+| `maxReconnects` | `5` | Retry count when reconnecting. |
+| `connectTimeout` | `0` (forever) | Timeout in milliseconds when connecting. |
+| `socketTimeout` | `0` (forever) | Timeout in milliseconds when communicating. |
+| `maxMessageSize` | `104856600` (100 MB) | Maximum message size. |
+| `minIdle` | `0` | Minimum idle clients in the pool. |
+| `maxIdle` | `5` | Maximum idle clients in the pool. |
+
+### Kubernetes container
+
+Starts optimizers as standalone pods on Kubernetes.
+
+**Supported properties:**
+
+| Property | Required | Default | Description |
+|---|---|---|---|
+| `kube-config-path` | Yes | — | Path to the Kubernetes config file. |
+| `image` | Yes | — | Optimizer image name. |
+| `pullPolicy` | No | `IfNotPresent` | Image pull policy. |
+| `namespace` | No | `default` | Namespace where optimizer pods are deployed. |
+| `ams-optimizing-uri` | No | — | URI of the AMS Thrift optimizing endpoint. |
+| `cpu.factor` | No | `1.0` | CPU factor when requesting Kubernetes resources (1 CPU per thread by default). |
+| `memory` | Yes | — | Memory per thread in MB. |
+| `extra.jvm.heap.ratio` | No | `0.8` | Ratio of JVM heap memory to total pod memory. |
+
+```yaml
+containers:
+  - name: KubernetesContainer
+    container-impl: org.apache.amoro.server.manager.KubernetesOptimizerContainer
+    properties:
+      kube-config-path: ~/.kube/config
+      image: apache/amoro:{version}
+      pullPolicy: IfNotPresent
+```
+
+### Flink container
+
+Deploys optimizers as Flink streaming jobs on YARN or Kubernetes.
+
+**Supported properties:**
+
+| Property | Required | Default | Description |
+|---|---|---|---|
+| `flink-home` | Yes | — | Flink installation directory. |
+| `target` | Yes | `yarn-per-job` | Deployment target: `yarn-per-job`, `yarn-application`, `kubernetes-application`, or `session`. |
+| `job-uri` | No | — | Optimizer job JAR URI. Required for application mode. |
+| `ams-optimizing-uri` | No | — | URI of the AMS Thrift optimizing endpoint. |
+| `export.<key>` | No | — | Environment variables exported during job submission. |
+| `export.JAVA_HOME` | No | — | Java runtime location. |
+| `export.HADOOP_CONF_DIR` | No | — | Hadoop configuration directory (includes `hdfs-site.xml`, `core-site.xml`, `yarn-site.xml`). |
+| `export.JVM_ARGS` | No | — | Additional JVM arguments for the Flink job. |
+| `export.HADOOP_USER_NAME` | No | — | Username for submitting to YARN (simple auth). |
+| `export.FLINK_CONF_DIR` | No | — | Directory containing `flink-conf.yaml`. |
+| `flink-conf.<key>` | No | — | Any Flink configuration option, passed as `-Dkey=value`. |
+
+<Info>
+To better utilize resources, add these settings to the Flink optimizer group:
+
+- `flink-conf.taskmanager.memory.managed.size`: `32mb` — Flink optimizer has no computation logic and does not need managed memory.
+- `flink-conf.taskmanager.memory.network.max`: `32mb` — No inter-operator communication is needed.
+- `flink-conf.taskmanager.memory.network.min`: `32mb`
+</Info>
+
+<Tabs>
+  <Tab title="YARN per-job mode">
+    ```yaml
+    containers:
+      - name: flinkContainer
+        container-impl: org.apache.amoro.server.manager.FlinkOptimizerContainer
+        properties:
+          flink-home: /opt/flink/                                         # Flink install home
+          export.HADOOP_CONF_DIR: /etc/hadoop/conf/                       # Hadoop config dir
+          export.HADOOP_USER_NAME: hadoop                                 # Hadoop user submit on yarn
+          export.JVM_ARGS: -Djava.security.krb5.conf=/opt/krb5.conf       # Flink launch jvm args, like kerberos config when ues kerberos
+          export.FLINK_CONF_DIR: /etc/hadoop/conf/                        # Flink config dir
+    ```
+  </Tab>
+  <Tab title="Kubernetes application mode">
+    ```yaml
+    containers:
+      - name: flinkContainer
+        container-impl: org.apache.amoro.server.manager.FlinkOptimizerContainer
+        properties:
+          flink-home: /opt/flink/                                                        # Flink install home
+          target: kubernetes-application                                                 # Flink run as native kubernetes
+          pullPolicy: IfNotPresent                                                       # Specify the imagePullPolicy in the container spec
+          job-uri: "local:///opt/flink/usrlib/optimizer-job.jar"                         # Optimizer job main jar for kubernetes application
+          ams-optimizing-uri: thrift://ams.amoro.service.local:1261                      # AMS optimizing uri
+          export.FLINK_CONF_DIR: /opt/flink/conf/                                        # Flink config dir
+          flink-conf.kubernetes.container.image: "apache/amoro-flink-optimizer:{version}" # Optimizer image ref
+          flink-conf.kubernetes.service-account: flink                                   # Service account that is used within kubernetes cluster.
+    ```
+  </Tab>
+  <Tab title="Flink session mode">
+    ```yaml
+    containers:
+      - name: flinkContainer
+        container-impl: org.apache.amoro.server.manager.FlinkOptimizerContainer
+        properties:
+          target: session                                                                # Flink run in session cluster
+          job-uri: "local:///opt/flink/usrlib/optimizer-job.jar"                         # Optimizer job main jar
+          ams-optimizing-uri: thrift://ams.amoro.service.local:1261                      # AMS optimizing uri
+          export.FLINK_CONF_DIR: /opt/flink/conf/                                        # Flink config dir (contains session cluster rest connection params)
+          flink-conf.high-availability: zookeeper
+          flink-conf.high-availability.zookeeper.quorum: xxx:2181
+          flink-conf.high-availability.zookeeper.path.root: /flink
+          flink-conf.high-availability.cluster-id: amoro-optimizer-cluster
+          flink-conf.high-availability.storageDir: hdfs://xxx/xxx/xxx
+          flink-conf.rest.address: localhost:8081                                        # Required if session cluster is not in HA mode
+    ```
+  </Tab>
+</Tabs>
+
+### Spark container
+
+Deploys optimizers as Spark jobs on YARN or Kubernetes.
+
+**Supported properties:**
+
+| Property | Required | Default | Description |
+|---|---|---|---|
+| `spark-home` | Yes | — | Spark installation directory. |
+| `master` | Yes | `yarn` | Cluster manager: `yarn` or `k8s://HOST:PORT`. |
+| `deploy-mode` | Yes | `client` | Spark deploy mode: `client` or `cluster`. |
+| `job-uri` | No | — | Optimizer job JAR URI. Required for cluster mode. |
+| `ams-optimizing-uri` | No | — | URI of the AMS Thrift optimizing endpoint. |
+| `export.<key>` | No | — | Environment variables exported during job submission. |
+| `export.HADOOP_CONF_DIR` | No | — | Hadoop configuration directory. |
+| `export.JVM_ARGS` | No | — | Additional JVM arguments. |
+| `export.HADOOP_USER_NAME` | No | — | Username for submitting to YARN (simple auth). |
+| `export.SPARK_CONF_DIR` | No | — | Directory containing `spark-defaults.conf`. |
+| `spark-conf.<key>` | No | — | Any Spark configuration option, passed as `--conf key=value`. |
+
+<Info>
+The Spark optimizer uses Dynamic Resource Allocation (DRA) by default. Optimizer parallelism equals `spark.dynamicAllocation.maxExecutors`. To disable DRA:
+
+- Set `spark-conf.spark.dynamicAllocation.enabled` to `false`.
+- Set `spark-conf.spark.dynamicAllocation.maxExecutors` to your desired parallelism.
+
+If the Spark optimizer encounters class conflicts, try setting both `spark-conf.spark.driver.userClassPathFirst` and `spark-conf.spark.executor.userClassPathFirst` to `true`.
+</Info>
+
+<Tabs>
+  <Tab title="YARN client mode">
+    ```yaml
+    containers:
+      - name: sparkContainer
+        container-impl: org.apache.amoro.server.manager.SparkOptimizerContainer
+        properties:
+          spark-home: /opt/spark/                                         # Spark install home
+          master: yarn                                                    # Cluster manager
+          deploy-mode: client                                             # Spark run as client mode
+          export.HADOOP_CONF_DIR: /etc/hadoop/conf/                       # Hadoop config dir
+          export.HADOOP_USER_NAME: hadoop                                 # Hadoop user submits on yarn
+          export.JVM_ARGS: -Djava.security.krb5.conf=/opt/krb5.conf       # Spark launch jvm args
+          export.SPARK_CONF_DIR: /etc/hadoop/conf/                        # Spark config dir
+    ```
+  </Tab>
+  <Tab title="Kubernetes cluster mode">
+    ```yaml
+    containers:
+      - name: sparkContainer
+        container-impl: org.apache.amoro.server.manager.SparkOptimizerContainer
+        properties:
+          spark-home: /opt/spark/                                                                  # Spark install home
+          master: k8s://https://<k8s-apiserver-host>:<k8s-apiserver-port>                          # Kubernetes cluster manager
+          deploy-mode: cluster                                                                     # Spark deploy mode
+          pullPolicy: IfNotPresent                                                                 # Image pull policy
+          job-uri: "local:///opt/spark/usrlib/optimizer-job.jar"                                   # Optimizer job main jar
+          ams-optimizing-uri: thrift://ams.amoro.service.local:1261                                # AMS optimizing uri
+          export.HADOOP_USER_NAME: hadoop
+          export.HADOOP_CONF_DIR: /etc/hadoop/conf/
+          export.SPARK_CONF_DIR: /opt/spark/conf/
+          spark-conf.spark.kubernetes.container.image: "apache/amoro-spark-optimizer:{version}"    # Optimizer image ref
+          spark-conf.spark.dynamicAllocation.enabled: "true"
+          spark-conf.spark.shuffle.service.enabled: "false"
+          spark-conf.spark.dynamicAllocation.shuffleTracking.enabled: "true"
+          spark-conf.spark.kubernetes.namespace: <spark-namespace>
+          spark-conf.spark.kubernetes.authenticate.driver.serviceAccountName: <spark-sa>
+    ```
+  </Tab>
+</Tabs>
+
+### External container
+
+The external container allows you to start optimizers manually outside of AMS. AMS creates a built-in `external` container automatically—no configuration is needed.
+
+## Optimizer groups
+
+An optimizer group divides optimizer resources among tables. Each table is assigned to exactly one group; tables in the same group share resources, while tables in different groups are isolated.
+
+### Add an optimizer group
+
+<Steps>
+  <Step title="Open the Optimizer Groups page">
+    In the AMS Dashboard, navigate to **Optimizer Groups** and click **Add Group**.
+  </Step>
+  <Step title="Configure the group">
+    Fill in the following:
+
+    | Field | Description |
+    |---|---|
+    | **name** | The name displayed in the optimizer group list. |
+    | **container** | The name of a container defined in `config.yaml`. |
+    | **properties** | Default configuration for this group, used when scaling out from the Dashboard. Supports Flink and Spark native parameters using `flink-conf.<key>` or `spark-conf.<key>` prefixes. |
+
+    **Supported group properties:**
+
+    | Property | Container | Required | Default | Description |
+    |---|---|---|---|---|
+    | `scheduling-policy` | All | No | `quota` | Scheduling policy. `quota` allocates resources proportional to each table's configured quota. `balanced` prioritizes tables that have not been optimized recently. |
+    | `max-input-file-size-per-thread` | All | No | `536870912` (512 MB) | Maximum input file size per optimizer thread. |
+    | `ams-optimizing-uri` | All | No | Derived from AMS config | Optimizing service endpoint. Use when the default endpoint is not reachable. |
+    | `cache-enabled` | All | No | `false` | Whether to enable caching in the optimizer. |
+    | `cache-max-total-size` | All | No | `128mb` | Maximum total cache size in the optimizer. |
+    | `cache-max-entry-size` | All | No | `64mb` | Maximum size of a single cache entry. |
+    | `cache-timeout` | All | No | `10min` | Cache entry timeout. |
+    | `min-parallelism` | All | No | `0` | Minimum total parallelism (CPU cores) the group should maintain. AMS auto-scales when running cores fall below this value. Set to `0` to disable. |
+    | `memory` | Local | Yes | — | Maximum JVM memory for the local optimizer, in MB. |
+    | `flink-conf.<key>` | Flink | No | — | Flink configuration overrides. Priority: optimizer group > optimizer container > `flink-conf.yaml`. |
+    | `spark-conf.<key>` | Spark | No | — | Spark configuration overrides. Priority: optimizer group > optimizer container > `spark-defaults.conf`. |
+  </Step>
+</Steps>
+
+### Edit an optimizer group
+
+Click the **Edit** button on the **Optimizer Groups** page to modify a group's configuration.
+
+### Remove an optimizer group
+
+Click the **Remove** button on the **Optimizer Groups** page. A group can only be removed if no catalog or table references it and no running optimizers belong to it.
+
+## Manage optimizer instances
+
+### Create an optimizer
+
+On the **Optimizers** page, click **Create Optimizer**, select the target optimizer group and parallelism, then click **OK**. A successfully started optimizer appears with status `RUNNING`.
+
+### Release an optimizer
+
+On the **Optimizers** page, click the **Release** button next to the optimizer you want to stop.
+
+<Note>
+Only optimizers that were scaled out through the Dashboard can be released from the Dashboard.
+</Note>
+
+### Deploy an external optimizer manually
+
+You can submit an optimizer from your own Flink or Spark environment.
+
+<Tabs>
+  <Tab title="Flink">
+    ```bash
+    ./bin/flink run-application -t yarn-application \
+     -Djobmanager.memory.process.size=1024mb \
+     -Dtaskmanager.memory.process.size=2048mb \
+     -Dtaskmanager.memory.managed.size=32mb \
+     -Dtaskmanager.memory.network.max=32mb \
+     -Dtaskmanager.memory.network.min=32mb \
+     -c org.apache.amoro.optimizer.flink.FlinkOptimizer \
+     ${AMORO_HOME}/plugin/optimizer/flink/optimizer-job.jar \
+     -a thrift://127.0.0.1:1261 \
+     -g flinkGroup \
+     -p 1
+    ```
+  </Tab>
+  <Tab title="Spark">
+    ```bash
+    ./bin/spark-submit --master yarn --deploy-mode cluster \
+     --conf "spark.driver.cores=1" \
+     --conf "spark.driver.memory=1g" \
+     --conf "spark.executor.cores=1" \
+     --conf "spark.executor.memory=2g" \
+     --class org.apache.amoro.optimizer.spark.SparkOptimizer \
+     ${AMORO_HOME}/plugin/optimizer/spark/optimizer-job.jar \
+     -a thrift://127.0.0.1:1261 \
+     -g sparkGroup \
+     -p 1
+    ```
+  </Tab>
+</Tabs>
+
+**Optimizer parameters:**
+
+| Parameter | Required | Description |
+|---|---|---|
+| `-a` | Yes | AMS Thrift service address, e.g. `thrift://127.0.0.1:1261`. |
+| `-g` | Yes | Optimizer group name (must be created under the external container). |
+| `-p` | Yes | Optimizer parallelism. |
+| `-hb` | No | Heartbeat interval in milliseconds. Must be less than `ams.optimizer.heart-beat-timeout` (default: 60000 ms). Default: `10000`. |
+| `-eds` | No | Whether to extend storage to disk. Default: `false`. |
+| `-dsp` | No | Directory for disk storage files. Default: system `java.io.tmpdir`. |
+| `-msz` | No | Memory storage size limit when using disk storage, in MB. Default: `512`. |
+| `-ce` | No | Whether to enable cache in the optimizer. Default: `false`. |
+| `-cmts` | No | Maximum total cache size. Default: `128mb`. |
+| `-cmes` | No | Maximum cache entry size. Default: `64mb`. |
+| `-ct` | No | Cache timeout. Default: `10min`. |
+
+## Per-table optimizer configuration
+
+Each table can override the optimizer group assignment and resource quota:
+
+| Property | Description |
+|---|---|
+| `self-optimizing.group` | Name of the optimizer group this table uses. Inherits the catalog's default group if not set. |
+| `self-optimizing.quota` | Resource quota for this table within its optimizer group. Larger quota values give the table a proportionally larger share of optimizer resources when `scheduling-policy` is `quota`. |

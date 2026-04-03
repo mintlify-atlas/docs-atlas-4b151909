@@ -1,0 +1,112 @@
+---
+title: "Spark Configuration"
+description: "Configure the Amoro Spark connector for performance tuning and advanced use cases."
+---
+
+The Amoro Spark connector is configured through standard Spark properties. All properties can be passed via `--conf` on the command line, set programmatically on a `SparkSession`, or placed in `spark-defaults.conf`.
+
+## Catalog configuration
+
+### Standalone Mixed-format catalog
+
+Register a dedicated catalog backed by AMS:
+
+```properties
+spark.sql.catalog.mixed_catalog=org.apache.amoro.spark.MixedFormatSparkCatalog
+spark.sql.catalog.mixed_catalog.ams.uri=thrift://${AMS_HOST}:${AMS_PORT}/${AMS_CATALOG_NAME}
+```
+
+Register a catalog using local (non-AMS) configuration:
+
+```properties
+spark.sql.catalog.mixed_catalog=org.apache.amoro.spark.MixedFormatSparkCatalog
+spark.sql.catalog.mixed_catalog.type=hadoop
+spark.sql.catalog.mixed_catalog.warehouse=/warehouse/hadoop_mixed_catalog
+```
+
+Switch to the catalog in Spark SQL:
+
+```sql
+USE mixed_catalog;
+```
+
+You can also reference tables directly using the three-part identifier `mixed_catalog.{db_name}.{table_name}` without switching the active catalog.
+
+### Set a default catalog
+
+To avoid running `USE mixed_catalog` at the start of every session, set the catalog as the default:
+
+```properties
+spark.sql.defaultCatalog=mixed_catalog
+spark.sql.catalog.mixed_catalog=org.apache.amoro.spark.MixedFormatSparkCatalog
+spark.sql.catalog.mixed_catalog.ams.uri=thrift://${AMS_HOST}:${AMS_PORT}/${AMS_CATALOG_NAME}
+```
+
+<Note>
+In a standalone `MixedFormatSparkCatalog`, only Mixed-format tables can be created and accessed. You cannot read or write non-Mixed-format tables through this catalog.
+</Note>
+
+### Session catalog (mixed access)
+
+If you need to access existing Hive tables or Spark data source tables **alongside** Mixed-format tables in the same session, use `MixedFormatSparkSessionCatalog` as the `spark_catalog` implementation:
+
+```properties
+spark.sql.catalog.spark_catalog=org.apache.amoro.spark.MixedFormatSparkSessionCatalog
+spark.sql.catalog.spark_catalog.ams.uri=thrift://${AMS_HOST}:${AMS_PORT}/${AMS_CATALOG_NAME}
+```
+
+<AccordionGroup>
+  <Accordion title="How MixedFormatSparkSessionCatalog resolves tables">
+    **Load:** When resolving a `db_name.table_name` identifier, the session catalog first loads table metadata using Spark's built-in session catalog, then checks for a Mixed-format flag in the table properties. If the flag is present, the table is re-loaded by `MixedFormatSparkCatalog`.
+
+    **Create:** The `CREATE TABLE` behavior is determined by the `USING {provider}` clause. If the clause is `USING mixed_iceberg` or `USING mixed_hive`, a Mixed-format table is created. Otherwise, Spark's default implementation is used.
+  </Accordion>
+  <Accordion title="Session catalog requirements">
+    When using `MixedFormatSparkSessionCatalog`, the following conditions must all be met:
+
+    - The catalog must be configured under the name `spark_catalog`.
+    - `spark.sql.catalogImplementation` must be set to `hive`.
+    - The catalog registered on AMS must use a **Hive** Metastore type.
+  </Accordion>
+</AccordionGroup>
+
+## High availability configuration
+
+If AMS is deployed with high availability (ZooKeeper-based), replace the Thrift URI with a ZooKeeper URI:
+
+```properties
+spark.sql.catalog.mixed_catalog=org.apache.amoro.spark.MixedFormatSparkCatalog
+spark.sql.catalog.mixed_catalog.ams.uri=zookeeper://{zookeeper-endpoint-list}/{cluster-name}/{catalog-name}
+```
+
+| Placeholder | Description |
+|---|---|
+| `zookeeper-endpoint-list` | Comma-separated `host:port` pairs, e.g. `192.168.1.1:2181,192.168.1.2:2181` |
+| `cluster-name` | Value of `ams.cluster.name` in the AMS `config.yaml` — identifies the AMS namespace on ZooKeeper |
+| `catalog-name` | Name of the catalog as registered on AMS |
+
+## Spark extensions
+
+The Mixed-format connector extends Spark SQL with custom syntax (e.g. `PRIMARY KEY` in `CREATE TABLE`). Always include the extensions class when using Mixed-format tables:
+
+```properties
+spark.sql.extensions=org.apache.amoro.spark.MixedFormatSparkExtensions
+```
+
+## Write options
+
+| Property | Default | Description |
+|---|---|---|
+| `write.upsert.enabled` | `false` | When `true`, `INSERT INTO` on a keyed table performs an upsert (update if key exists, insert if not). Set as a table property via `TBLPROPERTIES`. |
+| `spark.sql.mixed-format.check-source-data-uniqueness.enabled` | `false` | When `true`, Spark checks that source data has no duplicate primary keys before writing. Duplicate keys raise an error. Set as a Spark session property. |
+| `spark.sql.sources.partitionOverwriteMode` | `static` | Set to `dynamic` to replace only the partitions touched by incoming data during `INSERT OVERWRITE`. |
+
+## Full command-line example
+
+```bash
+${SPARK_HOME}/bin/spark-sql \
+    --conf spark.sql.extensions=org.apache.amoro.spark.MixedFormatSparkExtensions \
+    --conf spark.sql.catalog.mixed_catalog=org.apache.amoro.spark.MixedFormatSparkCatalog \
+    --conf spark.sql.catalog.mixed_catalog.ams.uri=thrift://ams-host:1260/my_catalog \
+    --conf spark.sql.defaultCatalog=mixed_catalog
+```

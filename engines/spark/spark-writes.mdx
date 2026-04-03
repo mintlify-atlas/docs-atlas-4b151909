@@ -1,0 +1,192 @@
+---
+title: "Spark Writes"
+description: "Write data to Amoro Mixed-format tables using Spark SQL and the DataFrame API."
+---
+
+This page covers all supported write operations for Mixed-format tables: overwrite, append, upsert, delete, update, and merge. For table creation see [Spark DDL](/engines/spark/spark-ddl), and for read operations see [Spark Queries](/engines/spark/spark-queries).
+
+## INSERT OVERWRITE
+
+`INSERT OVERWRITE` replaces partitions in a table with the results of a query. The behavior depends on Spark's partition overwrite mode.
+
+The table used in the examples below is defined as:
+
+```sql
+CREATE TABLE mixed_catalog.db.sample (
+    id   INT,
+    data STRING,
+    ts   TIMESTAMP,
+    PRIMARY KEY (id)
+) USING mixed_iceberg
+PARTITIONED BY (days(ts));
+```
+
+<Tabs>
+  <Tab title="Dynamic overwrite">
+    In dynamic mode, only the partitions touched by the incoming data are replaced.
+
+    ```sql
+    SET spark.sql.sources.partitionOverwriteMode=dynamic;
+
+    INSERT OVERWRITE mixed_catalog.db.sample VALUES
+      (1, 'aaa', TIMESTAMP('2022-1-1 09:00:00')),
+      (2, 'bbb', TIMESTAMP('2022-1-2 09:00:00')),
+      (3, 'ccc', TIMESTAMP('2022-1-3 09:00:00'));
+    ```
+  </Tab>
+  <Tab title="Static overwrite">
+    In static mode (Spark default), the `PARTITION` clause specifies which partition to replace. If the clause is omitted, all partitions are replaced.
+
+    ```sql
+    INSERT OVERWRITE mixed_catalog.db.sample
+    PARTITION (dt = '2021-1-1') VALUES
+      (1, 'aaa'), (2, 'bbb'), (3, 'ccc');
+    ```
+
+    <Warning>
+    Static overwrite does not support partition transforms. Use dynamic overwrite when your partition spec includes transforms such as `days(ts)` or `bucket(N, col)`.
+    </Warning>
+  </Tab>
+</Tabs>
+
+<Note>
+You can enable a uniqueness check on the primary key of the source data by setting `spark.sql.mixed-format.check-source-data-uniqueness.enabled = true`. Duplicate primary keys will cause an error during the write.
+</Note>
+
+## INSERT INTO
+
+Append new rows to a table:
+
+```sql
+INSERT INTO mixed_catalog.db.sample VALUES (1, 'a'), (2, 'b');
+
+INSERT INTO prod.db.table SELECT ...;
+```
+
+### Upsert with INSERT INTO
+
+For tables with a primary key, you can enable upsert mode via the `write.upsert.enabled` table property. When upsert is enabled, rows whose primary key already exists in the table are updated; new rows are inserted.
+
+```sql
+CREATE TABLE mixed_catalog.db.keyedTable (
+    id   INT,
+    data STRING,
+    PRIMARY KEY (id)
+) USING mixed_iceberg
+TBLPROPERTIES ('write.upsert.enabled' = 'true');
+```
+
+```sql
+INSERT INTO mixed_catalog.db.keyedTable VALUES (1, 'a'), (2, 'b');
+
+INSERT INTO prod.db.keyedTable SELECT ...;
+```
+
+<Note>
+When upsert is **disabled**, `INSERT INTO` performs a plain append even if duplicate primary keys are present.
+</Note>
+
+## DELETE FROM
+
+Delete rows that match a filter:
+
+```sql
+DELETE FROM mixed_catalog.db.sample
+WHERE ts >= '2020-05-01 00:00:00' AND ts < '2020-06-01 00:00:00';
+```
+
+Subquery predicates are also supported:
+
+```sql
+DELETE FROM mixed_catalog.db.sample
+WHERE session_time < (SELECT MIN(session_time) FROM prod.db.good_events);
+
+DELETE FROM mixed_catalog.db.sample AS t1
+WHERE EXISTS (
+    SELECT oid FROM prod.db.returned_orders WHERE t1.oid = oid
+);
+```
+
+## UPDATE
+
+Modify column values for rows that match a filter:
+
+```sql
+UPDATE mixed_catalog.db.sample
+SET c1 = 'update_c1', c2 = 'update_c2'
+WHERE ts >= '2020-05-01 00:00:00' AND ts < '2020-06-01 00:00:00';
+```
+
+Subquery predicates are also supported:
+
+```sql
+UPDATE mixed_catalog.db.sample
+SET session_time = 0, ignored = true
+WHERE session_time < (SELECT MIN(session_time) FROM prod.db.good_events);
+
+UPDATE mixed_catalog.db.sample AS t1
+SET order_status = 'returned'
+WHERE EXISTS (
+    SELECT oid FROM prod.db.returned_orders WHERE t1.oid = oid
+);
+```
+
+## MERGE INTO
+
+`MERGE INTO` allows you to combine insert, update, and delete actions in a single statement.
+
+Basic syntax:
+
+```sql
+MERGE INTO prod.db.target t       -- target table
+USING (SELECT ...) s              -- source updates
+ON t.id = s.id                    -- join condition
+WHEN ...                          -- actions
+```
+
+Multi-action example:
+
+```sql
+MERGE INTO prod.db.target t
+USING prod.db.source s
+ON t.id = s.id
+WHEN MATCHED AND s.op = 'delete'                          THEN DELETE
+WHEN MATCHED AND t.count IS NULL AND s.op = 'increment'   THEN UPDATE SET t.count = 0
+WHEN MATCHED AND s.op = 'increment'                       THEN UPDATE SET t.count = t.count + 1
+WHEN NOT MATCHED                                          THEN INSERT *;
+```
+
+## Writing with DataFrames
+
+### Append data
+
+```scala
+val data: DataFrame = ...
+data.writeTo("mixed_catalog.db.sample").append()
+```
+
+### Overwrite partitions
+
+```scala
+val data: DataFrame = ...
+data.writeTo("mixed_catalog.db.sample").overwritePartitions()
+```
+
+### Create a table and write data
+
+The `create()` method is the DataFrame equivalent of `CREATE TABLE AS SELECT`:
+
+```scala
+val data: DataFrame = ...
+data.writeTo("mixed_catalog.db.sample").create()
+```
+
+To specify primary keys and partition columns when creating a table via the DataFrame API:
+
+```scala
+val data: DataFrame = ...
+data.write.format("mixed_iceberg")
+    .partitionBy("data")
+    .option("primary.keys", "xxx")
+    .save("mixed_catalog.db.sample")
+```

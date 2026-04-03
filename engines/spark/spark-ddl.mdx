@@ -1,0 +1,276 @@
+---
+title: "Spark DDL"
+description: "Create and manage Amoro Mixed-format tables using Spark SQL DDL statements."
+---
+
+Mixed-format tables are created by specifying `USING mixed_iceberg` or `USING mixed_hive` in your `CREATE TABLE` statement. All DDL runs against a catalog registered in Spark that points to AMS. See [Spark — Get Started](/engines/spark/spark-get-started) for catalog setup.
+
+## CREATE TABLE
+
+```sql
+CREATE TABLE mixed_catalog.db.sample (
+    id     BIGINT COMMENT 'unique id',
+    data   STRING
+) USING mixed_iceberg;
+```
+
+<Info>
+Use `USING mixed_hive` instead of `USING mixed_iceberg` when the catalog is backed by a Hive Metastore. The resulting table is Hive-compatible.
+</Info>
+
+### Primary key
+
+Add `PRIMARY KEY` to the column list to designate one or more columns as the primary key. Amoro enforces uniqueness through merge-on-read and self-optimizing.
+
+```sql
+CREATE TABLE mixed_catalog.db.sample (
+    id   BIGINT COMMENT 'unique id',
+    data STRING,
+    PRIMARY KEY (id)
+) USING mixed_iceberg;
+```
+
+### Partitioning
+
+Use `PARTITIONED BY` to specify a partition spec. Mixed-Iceberg format supports all Iceberg partition transforms.
+
+```sql
+CREATE TABLE mixed_catalog.db.sample (
+    id       BIGINT,
+    data     STRING,
+    category STRING
+) USING mixed_iceberg
+PARTITIONED BY (category);
+```
+
+You can combine multiple transforms and mix identity columns with transform expressions:
+
+```sql
+CREATE TABLE mixed_catalog.db.sample (
+    id       BIGINT,
+    data     STRING,
+    category STRING,
+    ts       TIMESTAMP,
+    PRIMARY KEY (id)
+) USING mixed_iceberg
+PARTITIONED BY (bucket(16, id), days(ts), category);
+```
+
+<AccordionGroup>
+  <Accordion title="Supported partition transforms">
+    | Transform | Description |
+    |---|---|
+    | `years(ts)` | Partition by year |
+    | `months(ts)` | Partition by month |
+    | `days(ts)` / `date(ts)` | Partition by date |
+    | `hours(ts)` / `date_hour(ts)` | Partition by date and hour |
+    | `bucket(N, col)` | Partition by hashed value mod N buckets |
+    | `truncate(L, col)` | Partition by value truncated to L (strings truncated to length; integers/longs truncated to bins) |
+  </Accordion>
+</AccordionGroup>
+
+<Warning>
+Mixed-Hive format does not support partition transforms. Use identity columns only.
+</Warning>
+
+### Table properties
+
+Pass key-value pairs via `TBLPROPERTIES` at creation time:
+
+```sql
+CREATE TABLE mixed_catalog.db.sample (
+    id   BIGINT,
+    data STRING,
+    PRIMARY KEY (id)
+) USING mixed_iceberg
+TBLPROPERTIES (
+    'write.upsert.enabled' = 'true'
+);
+```
+
+## CREATE TABLE ... AS SELECT
+
+Create a table and populate it from a query in one statement:
+
+```sql
+CREATE TABLE mixed_catalog.db.sample
+USING mixed_iceberg
+AS SELECT ...;
+```
+
+To set primary keys, partitions, and properties on the new table, use the extended form:
+
+```sql
+CREATE TABLE mixed_catalog.db.sample
+PRIMARY KEY (id) USING mixed_iceberg
+PARTITIONED BY (pt)
+TBLPROPERTIES ('prop1'='val1', 'prop2'='val2')
+AS SELECT ...;
+```
+
+<Warning>
+`CREATE TABLE ... AS SELECT` does not provide atomicity guarantees in the current version. To enable a uniqueness check on the primary key of the source data, set `spark.sql.mixed-format.check-source-data-uniqueness.enabled = true`. Duplicate primary keys will cause an error during the write.
+</Warning>
+
+## CREATE TABLE ... LIKE
+
+Copy the schema of an existing table (including primary keys and partitions) without copying its data:
+
+```sql
+USE mixed_catalog;
+
+CREATE TABLE db.sample
+LIKE db.sample2
+USING mixed_iceberg
+TBLPROPERTIES ('owner' = 'xxxx');
+```
+
+<Note>
+`CREATE TABLE ... LIKE` only supports the two-part `db.table` form and requires that both tables are in the same catalog. If the source is a Mixed-format table with a primary key, the primary key is copied. Otherwise only the schema is copied.
+</Note>
+
+## REPLACE TABLE ... AS SELECT
+
+Replace a table's data with the results of a query:
+
+```sql
+REPLACE TABLE mixed_catalog.db.sample
+USING mixed_iceberg
+AS SELECT ...;
+```
+
+<Warning>
+`REPLACE TABLE ... AS SELECT` only supports tables **without** primary keys in the current version and does not provide atomicity guarantees.
+</Warning>
+
+## DROP TABLE
+
+```sql
+DROP TABLE mixed_catalog.db.sample;
+```
+
+## TRUNCATE TABLE
+
+Delete all rows from a table while keeping its schema and properties:
+
+```sql
+TRUNCATE TABLE mixed_catalog.db.sample;
+```
+
+## ALTER TABLE
+
+### Set table properties
+
+```sql
+ALTER TABLE mixed_catalog.db.sample SET TBLPROPERTIES (
+    'read.split.target-size' = '268435456'
+);
+```
+
+Remove a property with `UNSET`:
+
+```sql
+ALTER TABLE mixed_catalog.db.sample UNSET TBLPROPERTIES ('read.split.target-size');
+```
+
+### Add columns
+
+```sql
+ALTER TABLE mixed_catalog.db.sample
+ADD COLUMNS (
+    new_column STRING COMMENT 'new_column docs'
+);
+```
+
+Add multiple columns or nested fields:
+
+```sql
+-- add a struct column
+ALTER TABLE mixed_catalog.db.sample
+ADD COLUMN point STRUCT<x: DOUBLE, y: DOUBLE>;
+
+-- add a field inside a struct
+ALTER TABLE mixed_catalog.db.sample
+ADD COLUMN point.z DOUBLE;
+```
+
+```sql
+-- add a nested array of structs
+ALTER TABLE mixed_catalog.db.sample
+ADD COLUMN points ARRAY<STRUCT<x: DOUBLE, y: DOUBLE>>;
+
+-- add a field to the struct element inside an array
+ALTER TABLE mixed_catalog.db.sample
+ADD COLUMN points.element.z DOUBLE;
+```
+
+```sql
+-- add a map with struct key and struct value
+ALTER TABLE mixed_catalog.db.sample
+ADD COLUMN points MAP<STRUCT<x: INT>, STRUCT<a: INT>>;
+
+-- add a field to the value struct in a map
+ALTER TABLE mixed_catalog.db.sample
+ADD COLUMN points.value.b INT;
+```
+
+Control column position using `FIRST` or `AFTER`:
+
+```sql
+ALTER TABLE mixed_catalog.db.sample
+ADD COLUMN new_column BIGINT AFTER other_column;
+```
+
+```sql
+ALTER TABLE mixed_catalog.db.sample
+ADD COLUMN nested.new_column BIGINT FIRST;
+```
+
+### Rename a column
+
+```sql
+ALTER TABLE mixed_catalog.db.sample RENAME COLUMN data TO payload;
+```
+
+### Alter a column
+
+Widen a type, update a comment, or reorder a column:
+
+```sql
+ALTER TABLE mixed_catalog.db.sample ALTER COLUMN measurement TYPE DOUBLE;
+
+ALTER TABLE mixed_catalog.db.sample ALTER COLUMN measurement TYPE DOUBLE
+    COMMENT 'unit is bytes per second';
+
+ALTER TABLE mixed_catalog.db.sample ALTER COLUMN measurement
+    COMMENT 'unit is kilobytes per second';
+```
+
+Reorder columns with `FIRST` or `AFTER`:
+
+```sql
+ALTER TABLE mixed_catalog.db.sample ALTER COLUMN col FIRST;
+
+ALTER TABLE mixed_catalog.db.sample ALTER COLUMN nested.col AFTER other_col;
+```
+
+### Drop a column
+
+```sql
+ALTER TABLE mixed_catalog.db.sample DROP COLUMN id;
+ALTER TABLE mixed_catalog.db.sample DROP COLUMN point.z;
+```
+
+### Drop a partition
+
+```sql
+ALTER TABLE mixed_catalog.db.sample DROP IF EXISTS PARTITION (dt = 2022);
+```
+
+## DESCRIBE TABLE
+
+Return schema and metadata for a table. Primary key information is included for keyed tables.
+
+```sql
+DESCRIBE TABLE mixed_catalog.db.sample;
+```

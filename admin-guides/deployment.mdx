@@ -1,0 +1,387 @@
+---
+title: "Deployment"
+description: "Deploy Amoro Management Service for development and production environments."
+---
+
+## System requirements
+
+- Java 11 is required.
+- Optional: A relational database (PostgreSQL 14.x or higher, or MySQL 5.5 or higher) for production use.
+- Optional: ZooKeeper 3.4.x or higher for high availability mode.
+
+## Download the distribution
+
+Download the latest release from the [Apache Amoro download page](https://amoro.apache.org/download/). The main artifact is `apache-amoro-x.y.z-bin.tar.gz`. You can also download runtime packages for each engine version.
+
+Extract the archive to produce the `amoro-x.y.z` directory:
+
+```bash
+tar -xzf apache-amoro-x.y.z-bin.tar.gz
+cd amoro-x.y.z
+```
+
+## Source code compilation
+
+To build from source, clone the repository and run the Maven build. The following commands skip tests and produce the release package along with Flink and Spark runtime jars:
+
+```bash
+git clone https://github.com/apache/amoro.git
+cd amoro
+base_dir=$(pwd)
+./mvnw clean package -DskipTests
+```
+
+After the build completes, locate the artifacts:
+
+```bash
+# AMS release package
+cd dist/target/
+ls
+# amoro-x.y.z-bin.zip
+
+# Flink 1.18 runtime package
+cd ${base_dir}/amoro-format-mixed/amoro-mixed-flink/v1.18/amoro-mixed-flink-runtime-1.18/target
+ls
+# amoro-format-mixed-flink-runtime-1.18-x.y.z.jar
+
+# Spark 3.3 runtime package
+cd ${base_dir}/amoro-format-mixed/amoro-mixed-spark/v3.3/amoro-mixed-spark-runtime-3.3/target
+ls
+# amoro-format-mixed-spark-runtime-3.3-x.y.z.jar
+```
+
+Additional build guidance is available in the [project README](https://github.com/apache/amoro?tab=readme-ov-file#building).
+
+## Configuration
+
+Edit `{AMORO_HOME}/conf/config.yaml` before starting AMS in a production environment. The sections below describe each configuration area.
+
+### Service address
+
+| Configuration key | Description |
+|---|---|
+| `ams.server-bind-host` | Host AMS binds to. Defaults to `0.0.0.0` (all interfaces). |
+| `ams.server-expose-host` | Host or IP prefix exposed to compute engines and optimizers. AMS selects the first matching interface at startup. |
+| `ams.thrift-server.table-service.bind-port` | Port for the table service (compute engine access). Default: `1260`. |
+| `ams.thrift-server.optimizing-service.bind-port` | Port for the optimizing service (optimizer access). Default: `1261`. |
+| `ams.http-server.bind-port` | Port for the Dashboard and Open API. Default: `1630`. |
+| `ams.http-server.rest-auth-type` | REST API authentication type: `token` (default), `basic`, or `jwt`. |
+| `ams.http-server.login-auth-provider` | Dashboard login authentication provider class. |
+
+```yaml
+ams:
+  server-bind-host: "0.0.0.0" # The IP address for service listening, default is 0.0.0.0.
+  server-expose-host: "127.0.0.1" # The IP address for service external exposure, default is 127.0.0.1.
+
+  thrift-server:
+    table-service:
+      bind-port: 1260 # The port for accessing AMS table service.
+    optimizing-service:
+      bind-port: 1261 # The port for accessing AMS optimizing service.
+
+  http-server:
+    session-timeout: 7d # Re-login after 7 days
+    bind-port: 1630 # The port for accessing AMS Dashboard.
+    login-auth-provider: org.apache.amoro.server.authentication.DefaultPasswdAuthenticationProvider
+    # Enable LDAP login for Dashboard:
+    # login-auth-provider: org.apache.amoro.server.authentication.LdapPasswdAuthenticationProvider
+    # login-auth-ldap-url: "ldap://ldap.example.com:389"
+    # login-auth-ldap-user-pattern: "uid={0},ou=people,dc=example,dc=com"
+```
+
+<Note>
+Confirm that the configured ports are not already in use before starting AMS.
+</Note>
+
+### System database
+
+AMS uses embedded [Apache Derby](https://db.apache.org/derby/) as its backend storage by default. For production deployments, use a supported relational database.
+
+<Tabs>
+  <Tab title="Derby (default)">
+    No additional configuration is required. Derby is used automatically with the default settings:
+
+    ```yaml
+    ams:
+      database:
+        type: derby
+        jdbc-driver-class: org.apache.derby.jdbc.EmbeddedDriver
+        url: jdbc:derby:/tmp/amoro/derby;create=true
+        connection-pool-max-total: 20
+        connection-pool-max-idle: 16
+        connection-pool-max-wait-millis: 30000
+    ```
+  </Tab>
+  <Tab title="MySQL">
+    Download the [MySQL JDBC Connector](https://repo1.maven.org/maven2/com/mysql/mysql-connector-j/8.1.0/mysql-connector-j-8.1.0.jar) and place it in `${AMORO_HOME}/lib/`. Create an empty database in MySQL, then add the following to `config.yaml`:
+
+    ```yaml
+    ams:
+      database:
+        type: mysql
+        jdbc-driver-class: com.mysql.cj.jdbc.Driver
+        url: jdbc:mysql://127.0.0.1:3306/db?useUnicode=true&characterEncoding=UTF8&autoReconnect=true&useAffectedRows=true&allowPublicKeyRetrieval=true&useSSL=false
+        username: root
+        password: root
+        auto-create-tables: true
+        connection-pool-max-total: 20
+        connection-pool-max-idle: 16
+        connection-pool-max-wait-millis: 30000
+    ```
+  </Tab>
+  <Tab title="PostgreSQL">
+    Create an empty database in PostgreSQL, then add the following to `config.yaml`:
+
+    ```yaml
+    ams:
+      database:
+        type: postgres
+        jdbc-driver-class: org.postgresql.Driver
+        url: jdbc:postgresql://127.0.0.1:5432/db
+        username: user
+        password: passwd
+        auto-create-tables: true
+        connection-pool-max-total: 20
+        connection-pool-max-idle: 16
+        connection-pool-max-wait-millis: 30000
+    ```
+  </Tab>
+</Tabs>
+
+AMS creates the required tables automatically on first startup when `auto-create-tables: true` is set.
+
+### High availability
+
+AMS supports a one-master-multi-backup HA mode using ZooKeeper for leader election. The cluster name differentiates multiple AMS clusters sharing the same ZooKeeper ensemble.
+
+```yaml
+ams:
+  ha:
+    enabled: true  # Enable HA
+    cluster-name: default # Differentiating binding multiple sets of AMS on the same ZooKeeper.
+    zookeeper-address: 127.0.0.1:2181,127.0.0.1:2182,127.0.0.1:2183 # ZooKeeper server address.
+```
+
+### Optimizer containers
+
+Containers define the deployment environments for optimizers. AMS includes an `external` container by default for manually started optimizers. Configure additional containers to allow AMS to scale optimizers automatically.
+
+<Tabs>
+  <Tab title="Local container">
+    Runs optimizers as local JVM processes. Suitable for development and demo environments.
+
+    ```yaml
+    containers:
+      - name: localContainer
+        container-impl: org.apache.amoro.server.manager.LocalOptimizerContainer
+        properties:
+          export.JAVA_HOME: "/opt/java"   # JDK environment
+    ```
+  </Tab>
+  <Tab title="Flink container">
+    Deploys optimizers as Flink streaming jobs. Supports YARN and Kubernetes targets.
+
+    ```yaml
+    containers:
+      - name: flinkContainer
+        container-impl: org.apache.amoro.server.manager.FlinkOptimizerContainer
+        properties:
+          flink-home: "/opt/flink/"                                     # The installation directory of Flink
+          export.JVM_ARGS: "-Djava.security.krb5.conf=/opt/krb5.conf"   # Submitting Flink jobs with Java parameters, such as Kerberos parameters.
+          export.HADOOP_CONF_DIR: "/etc/hadoop/conf/"                   # Hadoop configuration file directory
+          export.HADOOP_USER_NAME: "hadoop"                             # Hadoop user
+          export.FLINK_CONF_DIR: "/etc/hadoop/conf/"                    # Flink configuration file directory
+    ```
+  </Tab>
+  <Tab title="Spark container">
+    Deploys optimizers as Spark jobs. Supports YARN and Kubernetes targets.
+
+    ```yaml
+    containers:
+      - name: sparkContainer
+        container-impl: org.apache.amoro.server.manager.SparkOptimizerContainer
+        properties:
+          spark-home: /opt/spark/                                     # Spark install home
+          master: yarn                                                # The cluster manager to connect to.
+          deploy-mode: cluster                                        # Spark deploy mode, client or cluster
+          export.JVM_ARGS: -Djava.security.krb5.conf=/opt/krb5.conf   # Spark launch jvm args, like kerberos config when ues kerberos
+          export.HADOOP_CONF_DIR: /etc/hadoop/conf/                   # Hadoop config dir
+          export.HADOOP_USER_NAME: hadoop                             # Hadoop user submit on yarn
+          export.SPARK_CONF_DIR: /opt/spark/conf/                     # Spark config dir
+    ```
+  </Tab>
+</Tabs>
+
+For full container configuration options, see [Managing Optimizers](/admin-guides/managing-optimizers).
+
+### Terminal
+
+The Terminal module in the AMS Dashboard allows users to execute SQL directly on the platform. Two backend implementations are available: `local` (embedded Spark) and `kyuubi`.
+
+<Tabs>
+  <Tab title="Local (embedded Spark)">
+    ```yaml
+    ams:
+      terminal:
+        backend: local
+        local.spark.sql.iceberg.handle-timestamp-without-timezone: false
+        # When the catalog type is Hive, it automatically uses the Spark session catalog to access Hive tables.
+        local.using-session-catalog-for-hive: true
+    ```
+  </Tab>
+  <Tab title="Kyuubi">
+    A running Kyuubi service is required. See the [Kyuubi documentation](https://kyuubi.readthedocs.io/en/master/) for deployment instructions.
+
+    ```yaml
+    ams:
+      terminal:
+        backend: kyuubi
+        kyuubi.jdbc.url: jdbc:hive2://127.0.0.1:10009/ # Kyuubi connection address
+    ```
+
+    To use LDAP authentication with Kyuubi:
+
+    ```yaml
+    ams:
+      terminal:
+        backend: kyuubi
+        kyuubi.ldap.enabled: true
+        kyuubi.jdbc.url: jdbc:hive2://127.0.0.1:10009/default;user=test;password=test
+    ```
+  </Tab>
+</Tabs>
+
+Additional terminal properties:
+
+| Key | Default | Description |
+|---|---|---|
+| `terminal.backend` | `local` | Terminal backend implementation. Valid values: `local`, `kyuubi`, `custom`. |
+| `terminal.factory` | — | Session factory implementation. `terminal.backend` must be `custom` if this is set. |
+| `terminal.result.limit` | `1000` | Row limit for result sets. |
+| `terminal.stop-on-error` | `false` | When a statement fails, stop execution or continue with remaining statements. |
+| `terminal.session.timeout` | `30` | Session timeout in minutes. |
+
+### Metric reporters
+
+Amoro uses a plugin mechanism to connect to external metric systems. All metric reporter plugins are configured in `$AMORO_CONF_DIR/plugins/metric-reporters.yaml`.
+
+The configuration format is:
+
+```yaml
+metric-reporters:
+  - name:       # The unified plugin name.
+    enabled:    # Whether this plugin is enabled; defaults to true.
+    properties: # A map of plugin properties.
+```
+
+#### Prometheus exporter
+
+Enable the `prometheus-exporter` plugin to start a Prometheus HTTP exporter server:
+
+```yaml
+metric-reporters:
+  - name: prometheus-exporter
+    enabled: true
+    properties:
+      port: 9090 # The port that the prometheus-exporter listens on.
+```
+
+Then add a scrape job to your Prometheus configuration:
+
+```yaml
+scrape_configs:
+  - job_name: 'amoro-exporter'
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['localhost:9090']  # The host and port configured in Amoro plugins config.
+```
+
+### Encrypted configuration
+
+AMS supports encrypted values for sensitive configuration items such as passwords. Built-in support is provided for Base64. You can also implement a custom decryption algorithm.
+
+- `ams.shade.identifier`: Specifies the encryption method. Defaults to `default` (no encryption). Set to `base64` to enable Base64 decryption.
+- `ams.shade.sensitive-keywords`: Semicolon-separated list of configuration keys under `ams` whose values are encrypted. Defaults to `admin-password;database.password`.
+
+Example with Base64-encrypted passwords:
+
+```yaml
+ams:
+  admin-username: admin
+  admin-password: YWRtaW4=    # Ciphertext for "admin"
+  server-bind-host: "0.0.0.0"
+  server-expose-host: "127.0.0.1"
+
+  shade:
+    identifier: base64
+    sensitive-keywords: admin-password;database.password
+
+  database:
+    type: mysql
+    jdbc-driver-class: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://127.0.0.1:3306/amoro?useUnicode=true&characterEncoding=UTF8&autoReconnect=true&useAffectedRows=true&allowPublicKeyRetrieval=true&useSSL=false
+    username: root
+    password: cGFzc3dvcmQ=    # Ciphertext for "password"
+```
+
+### Environment variables
+
+The following environment variables are read during AMS startup:
+
+| Variable | Default | Description |
+|---|---|---|
+| `AMORO_CONF_DIR` | `${AMORO_HOME}/conf` | Directory where Amoro loads configuration files. |
+| `AMORO_LOG_DIR` | `${AMORO_HOME}/logs` | Directory where log files are written. |
+
+`$AMORO_HOME` cannot be overridden and always points to the parent directory of `./bin`.
+
+### JVM configuration
+
+Set JVM options in `${AMORO_CONF_DIR}/jvm.properties`:
+
+| Property | JVM option | Description |
+|---|---|---|
+| `xms` | `-Xms${value}m` | Initial heap size. |
+| `xmx` | `-Xmx${value}m` | Maximum heap size. |
+| `jmx.remote.port` | `-Dcom.sun.management.jmxremote.port=${value}` | Enable JMX remote debugging. |
+| `extra.options` | `JAVA_OPTS="${JAVA_OPTS} ${JVM_EXTRA_CONFIG}"` | Additional JVM options. |
+
+## Start, stop, and restart AMS
+
+From the `amoro-x.y.z` directory:
+
+```bash
+# Start AMS
+bin/ams.sh start
+
+# Restart AMS
+bin/ams.sh restart
+
+# Stop AMS
+bin/ams.sh stop
+```
+
+After starting, open `http://localhost:1630` in a browser to access the Dashboard login page. The default username and password are both `admin`.
+
+## Upgrade AMS
+
+<Steps>
+  <Step title="Upgrade system databases">
+    Upgrade SQL scripts are located under `${AMORO_HOME}/conf/${db_type}/` and follow the naming pattern `upgrade-a.b.c-to-x.y.z.sql`. Execute each script in order to bring your database from its current version to the target version.
+  </Step>
+  <Step title="Replace libs and plugins">
+    Replace all contents of `{AMORO_HOME}/lib` with the contents from the new installation package's `lib` directory. Do the same for `{AMORO_HOME}/plugin`.
+
+    <Note>
+    Back up the old contents before replacing them so you can roll back if needed.
+    </Note>
+  </Step>
+  <Step title="Update configuration">
+    The existing `{AMORO_HOME}/conf/config.yaml` is usually compatible with the new version, but new versions may introduce additional parameters. Compare the old and new default configuration files and add any new parameters as needed.
+  </Step>
+  <Step title="Restart AMS">
+    ```bash
+    bin/ams.sh restart
+    ```
+  </Step>
+</Steps>

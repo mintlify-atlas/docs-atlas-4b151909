@@ -1,0 +1,84 @@
+---
+title: "Paimon Format"
+description: "Amoro provides metadata management and visibility for Apache Paimon tables."
+---
+
+## Amoro's role with Paimon
+
+Paimon format in Amoro refers to tables managed by [Apache Paimon](https://paimon.apache.org) — a streaming data lake platform with high-speed data ingestion, changelog tracking, and efficient real-time analytics.
+
+Amoro's integration with Paimon is focused on **metadata visibility and management**. By registering a Paimon catalog with Amoro, you can view and inspect your Paimon tables from the Amoro console without changing how engines read or write the tables.
+
+<Note>
+  Amoro does not run self-optimizing on Paimon tables. Compaction and data management are handled by Paimon's own engine-side mechanisms. Amoro's role is to surface metadata for observability.
+</Note>
+
+## What metadata Amoro displays
+
+After registering a Paimon catalog, the Amoro console shows the following information for each Paimon table:
+
+| Metadata view | Description |
+|---|---|
+| **Schema** | Column names, types, and nullability |
+| **Options** | Table properties and configuration options |
+| **Files** | Data and index files associated with the table |
+| **Snapshots** | Snapshot history with timestamps and commit details |
+| **DDLs** | DDL history — recorded schema change statements |
+| **Compaction** | Compaction job history and file-level compaction status |
+
+You can also run Spark SQL queries against Paimon tables directly from the Amoro Terminal.
+
+## Registering Paimon tables in Amoro
+
+To make Paimon tables visible in Amoro, register your Paimon catalog with the Amoro Management Service (AMS).
+
+<Steps>
+  <Step title="Open Catalog Management in Amoro">
+    In the Amoro console, navigate to **Catalogs** and click **Add Catalog**.
+  </Step>
+  <Step title="Select Paimon as the catalog type">
+    Choose **Paimon** from the catalog type list and provide the catalog name.
+  </Step>
+  <Step title="Configure the metastore and storage">
+    Enter the metastore URI (for Hive-backed Paimon catalogs) or the filesystem warehouse path (for filesystem-backed catalogs).
+
+    All catalog types and filesystem types supported by Paimon are supported by Amoro.
+  </Step>
+  <Step title="Add storage dependencies for S3 or OSS (if needed)">
+    If your Paimon tables are stored on S3 or Alibaba Cloud OSS, download the appropriate Paimon storage plugin JAR and place it in the `lib` directory of your Amoro installation:
+
+    - **S3:** [paimon-s3-0.5.0-incubating.jar](https://repo.maven.apache.org/maven2/org/apache/paimon/paimon-s3/0.5.0-incubating/paimon-s3-0.5.0-incubating.jar)
+    - **OSS:** [paimon-oss-0.5.0-incubating.jar](https://repo.maven.apache.org/maven2/org/apache/paimon/paimon-oss/0.5.0-incubating/paimon-oss-0.5.0-incubating.jar)
+
+    Restart AMS after adding the JAR.
+  </Step>
+  <Step title="Save and verify">
+    Save the catalog. Your Paimon databases and tables will appear in the Amoro console.
+  </Step>
+</Steps>
+
+For full catalog configuration details, see [Managing Catalogs](/admin-guides/managing-catalogs).
+
+## Limitations compared to Iceberg and Mixed formats
+
+| Capability | Iceberg | Mixed-Iceberg | Mixed-Hive | Paimon |
+|---|---|---|---|---|
+| Amoro self-optimizing | Yes | Yes | Yes | No |
+| Metadata visibility in console | Yes | Yes | Yes | Yes |
+| Amoro-managed catalog | Yes | Yes | Yes | Read-only registration |
+| Primary key enforcement (Amoro) | No | Yes | Yes | No (Paimon-native) |
+| CDC incremental reads (Amoro) | No | Yes | Yes | No (Paimon-native) |
+| Spark SQL in Terminal | Yes | Yes | Yes | Yes |
+
+<Warning>
+  Amoro does not manage the lifecycle of Paimon tables. Operations such as creating tables, altering schemas, running compaction, and expiring snapshots must be performed through Paimon's own engine integrations (Flink, Spark, or the Paimon CLI).
+</Warning>
+
+## Engine-side integrations
+
+For reading from and writing to Paimon tables, use Paimon's native engine connectors:
+
+- **Apache Flink:** [Paimon Flink user manual](https://paimon.apache.org/docs/master/engines/flink/)
+- **Apache Spark:** [Paimon Spark connector](https://paimon.apache.org/docs/master/engines/spark3/)
+
+Registering the catalog in Amoro does not change or replace these engine-side connectors. Amoro and the Paimon connectors coexist independently.

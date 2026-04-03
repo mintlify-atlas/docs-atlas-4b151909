@@ -1,0 +1,251 @@
+---
+title: "Using Tables"
+description: "Create, modify, and query Lakehouse tables managed by Amoro."
+---
+
+The SQL execution tool **Terminal** is provided in the AMS Dashboard to help you quickly create, modify, and delete tables. You can also use [Spark](/engines/spark/spark-ddl) and [Flink](/engines/flink/flink-ddl) engines to manage tables using SQL.
+
+## Create a table
+
+After logging into the AMS Dashboard, go to **Terminal**, enter your table creation statement, and execute it.
+
+The Terminal currently uses the Spark engine for SQL execution. For full syntax details, refer to [Spark DDL](/engines/spark/spark-ddl).
+
+The following example creates a Mixed-Iceberg table with LogStore and watermark configuration:
+
+```sql
+CREATE TABLE test_db.test_log_store(
+  id int,
+  name string,
+  op_time timestamp,
+  PRIMARY KEY(id)
+) USING mixed_iceberg
+PARTITIONED BY(days(op_time))
+TBLPROPERTIES(
+  'log-store.enable' = 'true',
+  'log-store.type' = 'kafka',
+  'log-store.address' = '127.0.0.1:9092',
+  'log-store.topic' = 'local_catalog.test_db.test_log_store.log_store',
+  'table.event-time-field' = 'op_time',
+  'table.watermark-allowed-lateness-second' = '60');
+```
+
+Different catalog types create different table formats. Refer to [Managing Catalogs](/admin-guides/managing-catalogs) for details.
+
+### Configure LogStore
+
+Mixed-Iceberg format tables may include a LogStore component for low-latency streaming. BaseStore and ChangeStore are created automatically, but LogStore requires explicit configuration.
+
+In the example above, the Kafka cluster at `127.0.0.1:9092` is used as the LogStore. Before executing, create the corresponding topic in Kafka or enable automatic topic creation on the cluster.
+
+For the full list of LogStore properties, see [LogStore configurations](/user-guides/configurations#logstore-configurations).
+
+### Configure watermark
+
+A watermark describes the write progress of a table — specifically, a timestamp indicating that all data with a smaller timestamp has been written.
+
+In the example above, `op_time` is set as the event time field and is used to calculate the watermark. To handle out-of-order writes, allowed lateness is set to 60 seconds.
+
+You can view the current watermark in the table details on the AMS Dashboard, or query it directly:
+
+```sql
+SHOW TBLPROPERTIES test_db.test_log_store ('watermark.table');
+```
+
+Expected result:
+
+```text
++-----------------+---------------+
+| key             | value         |
++-----------------+---------------+
+| watermark.table | 1668579055000 |
++-----------------+---------------+
+```
+
+<Note>
+  Watermark configuration is supported in Mixed-Hive and Mixed-Iceberg formats only. Iceberg format does not support watermarks.
+</Note>
+
+## Modify a table
+
+Go to **Terminal** in the AMS Dashboard and execute an `ALTER TABLE` statement. The Terminal uses the Spark engine. For full syntax, refer to [Spark DDL](/engines/spark/spark-ddl).
+
+## Upgrade a Hive table
+
+Amoro supports the [Mixed-Hive format](/formats/mixed-hive), which allows you to add new table format capabilities directly on top of Hive.
+
+<Steps>
+  <Step title="Open the table in the Dashboard">
+    From the **Tables** menu, select a table under a Hive Catalog.
+  </Step>
+  <Step title="Click Upgrade">
+    Click the **Upgrade** button in the upper right corner of the table details page. This button is not shown for tables that have already been upgraded.
+  </Step>
+  <Step title="Configure and confirm">
+    On the upgrade page, select the primary key for the table, add any additional parameters, and click **OK**.
+  </Step>
+</Steps>
+
+## Configure self-optimizing
+
+Amoro's self-optimizing feature requires an active optimizer in the optimizer group assigned to the table.
+
+### Change the optimizer group
+
+To assign a specific optimizer group to a table, set the `self-optimizing.group` property:
+
+```sql
+ALTER TABLE test_db.test_log_store SET TBLPROPERTIES (
+    'self-optimizing.group' = 'group_name');
+```
+
+The default value is `default`.
+
+### Adjust resource quota
+
+If multiple tables share the same optimizer group, you can control each table's resource share using the `quota` property:
+
+```sql
+ALTER TABLE test_db.test_log_store SET TBLPROPERTIES (
+    'self-optimizing.quota' = '0.1');
+```
+
+For more details, refer to [Self-optimizing configurations](/user-guides/configurations#self-optimizing-configurations).
+
+### Adjust optimizing parameters
+
+You can set execution intervals, task sizes, and timeouts for each optimize type. For example, to set the minor optimizing interval:
+
+```sql
+ALTER TABLE test_db.test_log_store SET TBLPROPERTIES (
+    'self-optimizing.minor.trigger.interval' = '3600000');
+```
+
+### Enable or disable self-optimizing
+
+Self-optimizing is enabled by default. To disable it:
+
+```sql
+ALTER TABLE test_db.test_log_store SET TBLPROPERTIES (
+    'self-optimizing.enabled' = 'false');
+```
+
+To re-enable it, set the value back to `'true'`.
+
+## Configure data expiration
+
+Amoro can periodically clean data based on a table's expiration policy. The AMS `data-expiration` thread must be enabled in the configuration file for this to run.
+
+### Enable or disable data expiration
+
+Data expiration is disabled by default. To enable it:
+
+```sql
+ALTER TABLE test_db.test_log_store SET TBLPROPERTIES (
+    'data-expire.enabled' = 'true');
+```
+
+### Set the retention period
+
+The retention period is expressed as a number and unit. For example, `90d` retains data for 90 days and `12h` retains data for 12 hours:
+
+```sql
+ALTER TABLE test_db.test_log_store SET TBLPROPERTIES (
+    'data-expire.retention-time' = '90d');
+```
+
+### Select the expiration field
+
+You must specify the field used to determine expiration. Supported field types are `timestamp`, `timestampz`, `string` (with a date pattern), and `long` (with a timestamp unit).
+
+<CodeGroup>
+
+```sql timestamp field
+ALTER TABLE test_db.test_log_store SET TBLPROPERTIES (
+    'data-expire.field' = 'op_time');
+```
+
+```sql string field
+ALTER TABLE test_db.test_log_store SET TBLPROPERTIES (
+    'data-expire.field' = 'op_time',
+    'data-expire.datetime-string-pattern' = 'yyyy-MM-dd');
+```
+
+```sql long field
+ALTER TABLE test_db.test_log_store SET TBLPROPERTIES (
+    'data-expire.field' = 'op_time',
+    'data-expire.datetime-number-format' = 'TIMESTAMP_MS');
+```
+
+</CodeGroup>
+
+<Info>
+  `timestamp`, `timestampz`, and `long` field types use UTC. Other types use the local time zone.
+</Info>
+
+### Adjust the expiration level
+
+Data expiration supports two levels: `PARTITION` and `FILE`. The default is `PARTITION`, meaning files are only deleted once all files in a partition have expired.
+
+```sql
+ALTER TABLE test_db.test_log_store SET TBLPROPERTIES (
+    'data-expire.level' = 'partition');
+```
+
+### Specify the start time for expiration
+
+You can choose whether expiration starts from the table's last commit time or the current service time:
+
+```sql
+ALTER TABLE test_db.test_log_store SET TBLPROPERTIES (
+    'data-expire.base-on-rule' = 'CURRENT_TIME');
+```
+
+- `LAST_COMMIT_TIME` (default) — uses the timestamp of the table's most recent non-optimized snapshot, ensuring the table retains the full `retention-time` window of data.
+- `CURRENT_TIME` — uses the current time of the AMS service.
+
+## Delete a table
+
+In the **Terminal**, execute a `DROP TABLE` statement:
+
+```sql
+DROP TABLE test_db.test_log_store;
+```
+
+For full syntax, refer to [Spark DDL](/engines/spark/spark-ddl).
+
+## Explore table details
+
+The table details page in the AMS Dashboard includes several tabs:
+
+| Tab | Description |
+|-----|-------------|
+| **Details** | Schema, primary key, partition configuration, table properties, and file metrics for ChangeStore and BaseStore — including file count, average size, and latest commit time. |
+| **Files** | All partitions and files in the table. |
+| **Snapshots** | All snapshots, filterable by branch and tag. |
+| **Optimizing** | All self-optimizing processes, including file counts, sizes before and after optimize, and execution times. |
+| **Operations** | DDL change history for the table. |
+
+## Explore self-optimizing status
+
+The **Optimizing** page in the Dashboard shows the self-optimizing status of all tables.
+
+Each table reports its current **Optimizing Status**:
+
+| Status | Description |
+|--------|-------------|
+| `idle` | No self-optimizing is needed. |
+| `pending` | Self-optimizing is required and waiting for resources. |
+| `planning` | A self-optimizing process is being planned. |
+| `minor` | Minor optimizing is executing. |
+| `major` | Major optimizing is executing. |
+| `full` | Full optimizing is executing. |
+| `committing` | A self-optimizing process is being committed. |
+
+Additional columns show:
+
+- **Duration** — How long the table has been in the current status.
+- **File Count** — Total files involved in the current optimize run (base, insert, eq-delete, pos-delete).
+- **File Size** — Total size of files in the current optimize run.
+- **Quota** — Maximum optimizer resources allocated to the table.
+- **Quota Occupation** — Ratio of actual optimizer thread time used versus quota time within the last one-hour window.

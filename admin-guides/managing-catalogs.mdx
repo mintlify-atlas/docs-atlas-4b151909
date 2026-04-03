@@ -1,0 +1,114 @@
+---
+title: "Managing Catalogs"
+description: "Create, configure, and manage Amoro catalogs to connect storage environments and table formats."
+---
+
+## Overview
+
+A catalog in Amoro is a namespace that groups databases and tables. Tables are uniquely identified by `catalog.database.table`. In practice, a catalog typically corresponds to a metadata service such as Hive Metastore.
+
+### Catalog types
+
+Amoro classifies catalogs into two types based on where metadata is stored:
+
+<CardGroup cols={2}>
+  <Card title="Internal catalog" icon="database">
+    Uses AMS itself as the metadata service. Best for managed deployments where Amoro owns the table lifecycle.
+  </Card>
+  <Card title="External catalog" icon="server">
+    Uses an external metadata backend such as Hive Metastore, Hadoop, Glue, or a custom implementation.
+  </Card>
+</CardGroup>
+
+### Supported table formats
+
+Each catalog is associated with a single table format:
+
+- [Iceberg](/formats/iceberg)
+- [Paimon](/formats/paimon)
+- [Mixed-Hive](/formats/mixed-hive)
+- [Mixed-Iceberg](/formats/mixed-iceberg)
+
+## Create a catalog
+
+You create catalogs through the AMS Dashboard. Navigate to **Catalogs** and click **Create Catalog**.
+
+<Steps>
+  <Step title="Configure basic information">
+    Fill in the following fields:
+
+    | Field | Description |
+    |---|---|
+    | **name** | Catalog name. Supports numbers, letters, `_`, and `-`; must start with a letter. Lowercase is recommended. |
+    | **type** | `Internal Catalog` or `External Catalog`. |
+    | **metastore** | Metadata storage backend: `Hive Metastore`, `Hadoop`, `Glue`, or `Custom`. |
+    | **table format** | Select one: `Iceberg`, `Paimon`, `Mixed-Hive`, or `Mixed-Iceberg`. |
+    | **optimizer group** | Tables under this catalog will automatically perform self-optimizing within the selected group. |
+  </Step>
+  <Step title="Configure storage">
+    | Field | Description |
+    |---|---|
+    | **Type** | `Hadoop` or `S3`. |
+    | **core-site** | The `core-site.xml` of the Hadoop cluster. |
+    | **hdfs-site** | The `hdfs-site.xml` of the Hadoop cluster. |
+    | **hive-site** | The `hive-site.xml` for Hive. |
+    | **Region** | Region of the S3 bucket (S3 only). |
+    | **Endpoint** | Endpoint of the S3 bucket (S3 only). |
+  </Step>
+  <Step title="Configure authentication">
+    | Field | Description |
+    |---|---|
+    | **Type** | `SIMPLE`, `KERBEROS`, `AK/SK`, or `CUSTOM`. |
+    | **hadoop username** | Username for the Hadoop cluster (SIMPLE auth). |
+    | **keytab** | Kerberos keytab file. |
+    | **principal** | Principal from the keytab. |
+    | **krb5** | Kerberos `krb5.conf` configuration file. |
+    | **Access Key** | Access Key for S3. |
+    | **Secret Key** | Secret Access Key for S3. |
+  </Step>
+  <Step title="Configure properties">
+    Common properties:
+
+    | Property | Description |
+    |---|---|
+    | `warehouse` | **Required** for AMS, Hadoop, and Glue catalogs. Determines where database and table files are stored. |
+    | `catalog-impl` | **Required** when metastore is `Custom`. The fully-qualified class name of the catalog implementation. Place the implementation JAR in `{AMORO_HOME}/lib` and restart AMS. |
+    | `clients` | Hive Catalog connection pool size for HiveMetaStore access. Default: `20`. Requires AMS restart to take effect. |
+    | `database-filter` | Regular expression to filter databases shown in the table menu. If not set, all databases are displayed. |
+    | `table-filter` | Regular expression to filter tables, matched against `database.table`. For example, `(A\.a)\|(B\.b)` shows only table `a` in database `A` and table `b` in database `B`. |
+  </Step>
+  <Step title="Configure table properties">
+    Properties added here are inherited by all tables under the catalog. If the same property is configured at the table level, the table-level value takes precedence.
+  </Step>
+</Steps>
+
+## REST catalog
+
+To create an Iceberg REST Catalog, select:
+
+- **Catalog type**: External Catalog
+- **Metastore type**: Custom
+- **Table format**: Iceberg
+
+Then set the following properties:
+
+| Property | Value |
+|---|---|
+| `catalog-impl` | `org.apache.iceberg.rest.RESTCatalog` |
+| `uri` | The URI of your REST catalog service |
+
+### Nessie REST catalog
+
+To use a Nessie REST Catalog, follow the same steps as the REST catalog above and additionally set:
+
+| Property | Value |
+|---|---|
+| `catalog-impl` | `org.apache.iceberg.nessie.NessieCatalog` |
+
+## Delete a catalog
+
+Go to the catalog's detail page in the Dashboard and click the **Remove** button at the bottom.
+
+<Warning>
+Before deleting an internal catalog, AMS verifies that no tables exist under it. If tables are still present, the deletion will fail.
+</Warning>

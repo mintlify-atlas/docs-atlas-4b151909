@@ -1,0 +1,241 @@
+---
+title: "Deployment on Kubernetes"
+description: "Deploy Amoro using Helm charts on Kubernetes."
+---
+
+## Prerequisites
+
+Before deploying AMS on Kubernetes, ensure you have the following:
+
+- An active [Kubernetes cluster](https://kubernetes.io/docs/setup/)
+- [kubectl](https://kubernetes.io/docs/tasks/tools/#kubectl) installed and configured
+- [Helm 3+](https://helm.sh/docs/intro/quickstart/) installed
+- An AMS Docker image (official or custom-built)
+
+## Official Docker images
+
+Official images are published to [Docker Hub](https://hub.docker.com/u/apache):
+
+<CardGroup cols={3}>
+  <Card title="apache/amoro" icon="box">
+    AMS server image built from the Amoro binary distribution. Use this image to run the management service.
+  </Card>
+  <Card title="apache/amoro-flink-optimizer" icon="bolt">
+    Flink-based optimizer image built on the official Flink distribution.
+  </Card>
+  <Card title="apache/amoro-spark-optimizer" icon="bolt">
+    Spark-based optimizer image built on the official Spark distribution.
+  </Card>
+</CardGroup>
+
+## Build custom Docker images
+
+If you need to build images locally, use the `build.sh` script in the `docker/` directory:
+
+<CodeGroup>
+
+```bash AMS image
+./docker/build.sh amoro
+```
+
+```bash Flink optimizer image
+./docker/build.sh amoro-flink-optimizer --flink-version <flink-version>
+```
+
+```bash Spark optimizer image
+./docker/build.sh amoro-spark-optimizer --spark-version <spark-version>
+```
+
+</CodeGroup>
+
+## Install with Helm
+
+<Steps>
+  <Step title="Get the Helm charts">
+    Clone the Amoro repository and fetch chart dependencies:
+
+    ```bash
+    git clone https://github.com/apache/amoro.git
+    cd amoro/charts
+    helm dependency build ./amoro
+    ```
+  </Step>
+  <Step title="Install the chart">
+    ```bash
+    helm install <deployment-name> ./amoro
+    ```
+  </Step>
+  <Step title="Access the dashboard">
+    Forward the REST service port to your local machine:
+
+    ```bash
+    kubectl port-forward services/<deployment-name>-amoro-rest 1630:1630
+    ```
+
+    Open `http://localhost:1630` in your browser.
+  </Step>
+</Steps>
+
+## View logs
+
+Get the pod name and fetch logs:
+
+```bash
+kubectl get pod
+kubectl logs {amoro-pod-name}
+```
+
+## Uninstall
+
+```bash
+helm uninstall <deployment-name>
+```
+
+## Helm configuration
+
+Helm uses `values.yaml` as its configuration file. Copy it for independent maintenance:
+
+```bash
+cp amoro/values.yaml my-values.yaml
+```
+
+Apply your custom values file during installation:
+
+```bash
+helm install <deployment-name> ./amoro -f my-values.yaml
+```
+
+### Enable Ingress
+
+Ingress is disabled by default. Enable it for external access to the AMS Dashboard in production environments:
+
+```yaml
+ingress:
+  enabled: true
+  ingressClassName: "nginx"
+  hostname: minikube.amoro.com
+```
+
+### Configure the database
+
+AMS uses embedded Apache Derby by default. For production environments, use a relational database with higher availability guarantees. See [Deployment — Configure system database](/admin-guides/deployment#system-database) for configuration details.
+
+```yaml
+amoroConf:
+  database:
+    type: ${your_database_type}
+    driver: ${your_database_driver}
+    url: ${your_jdbc_url}
+    username: ${your_username}
+    password: ${your_password}
+```
+
+### Configure the image
+
+To use a private repository or a custom image, override the image settings:
+
+```yaml
+image:
+  repository: <your-repository>
+  pullPolicy: IfNotPresent
+  tag: <your-tag>
+imagePullSecrets: []
+```
+
+### Configure the Flink optimizer container
+
+The Flink optimizer container is enabled by default. Modify the `optimizer.flink` section to customize it:
+
+```yaml
+optimizer:
+  flink:
+    enabled: true
+    ## container name, default is flink
+    name: ~
+    image:
+      ## the image repository
+      repository: apache/amoro-flink-optimizer
+      ## the image tag, if not set, the default value is the same as the amoro image tag.
+      tag: ~
+      pullPolicy: IfNotPresent
+      ## the location of flink optimizer jar in image.
+      jobUri: "local:///opt/flink/usrlib/optimizer-job.jar"
+    properties: {
+      "flink-conf.taskmanager.memory.managed.size": "32mb",
+      "flink-conf.taskmanager.memory.network.max": "32mb",
+      "flink-conf.taskmanager.memory.network.min": "32mb"
+    }
+```
+
+### Configure the Kubernetes optimizer container
+
+The Kubernetes optimizer container is enabled by default. Modify the `optimizer.kubernetes` section to customize it:
+
+```yaml
+optimizer:
+  kubernetes:
+    enabled: true
+    properties:
+      namespace: "default"
+      kube-config-path: "~/.kube/config"
+      image: "apache/amoro:latest"
+      pullPolicy: "IfNotPresent"
+      # configure additional parameters by using the extra. prefix
+      # extra.jvm.heap.ratio: "0.8"
+```
+
+#### PodTemplate
+
+To customize the optimizer pod spec, add a `podTemplate` to the Kubernetes container properties. Priority order for configuration is: **Dashboard resource settings** → **user profile configuration** → **PodTemplate**.
+
+```yaml
+podTemplate: |
+  apiVersion: apps/v1
+  kind: PodTemplate
+  metadata:
+    name: <NAME_PREFIX><resourceId>
+  template:
+    metadata:
+      labels:
+        app: <NAME_PREFIX><resourceId>
+        AmoroOptimizerGroup: <groupName>
+        AmoroResourceId: <resourceId>
+    spec:
+      containers:
+        - name: optimizer
+          image: apache/amoro:0.6
+          imagePullPolicy: IfNotPresent
+          command: [ "sh", "-c", "echo 'Hello, World!'" ]
+          resources:
+            limits:
+              memory: 2048Mi
+              cpu: 2
+            requests:
+              memory: 2048Mi
+              cpu: 2
+```
+
+### Configure RBAC
+
+The Helm chart creates a service account, role, and role binding for Amoro by default. You can use an existing account instead:
+
+```yaml
+serviceAccount:
+  # Specifies whether a service account should be created or use an existing account
+  create: true
+  # Annotations to add to the service account
+  annotations: {}
+  # ServiceAccount name to use if create: false
+  name: ~
+  rbac:
+    # Create a role/role-bind if automatically creating a service account
+    create: true
+    # Create a cluster-role and cluster-role-bind if cluster: true
+    cluster: false
+```
+
+<Note>
+If `serviceAccount.create` is `false`, you must provide a `serviceAccount.name` and create the service account beforehand.
+
+If you need to schedule the Flink optimizer across namespaces, set `serviceAccount.rbac.cluster: true` or provide your own service account with the appropriate cluster-level permissions.
+</Note>

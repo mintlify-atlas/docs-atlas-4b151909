@@ -1,0 +1,128 @@
+---
+title: "Self-Optimizing"
+description: "Learn how Amoro continuously optimizes Lakehouse tables to maintain high query performance and reduce storage costs."
+keywords: ["amoro", "self-optimizing", "compaction", "minor optimizing", "major optimizing", "optimizer", "quota", "file compaction"]
+---
+
+Self-optimizing is Amoro's automated background mechanism for keeping Lakehouse tables in a healthy state. It handles file compaction, deduplication, sorting, and cleanup without any manual intervention.
+
+## Why self-optimizing matters
+
+Lakehouse is characterized by its openness and loose coupling, with data and files maintained by users through various engines. This architecture is well-suited for batch scenarios, but applying Lakehouse to streaming data warehouses and real-time analysis introduces significant challenges:
+
+- Streaming writes produce a massive number of small fragment files
+- CDC ingestion and streaming updates generate excessive redundant data
+- New data lake formats accumulate orphan files and expired snapshots over time
+
+These issues degrade the performance and increase the cost of data analysis. Amoro's self-optimizing mechanism addresses all of these problems automatically, providing an out-of-the-box Streaming Lakehouse experience as user-friendly as a traditional database or data warehouse.
+
+The core design goals of Amoro's self-optimizing are:
+
+- **Automated, asynchronous, and transparent** — Continuous background detection of file changes, asynchronous distributed execution of optimizing tasks, completely invisible to users
+- **Resource isolation and sharing** — Resources can be isolated and shared at the table level, with configurable resource quotas
+- **Flexible and scalable deployment** — Optimizers support various deployment methods and convenient scaling
+
+## File classification: fragments and segments
+
+Self-optimizing takes inspiration from the Generational Garbage Collection algorithm in the JVM. Files are divided into two classes based on their size, controlled by two table properties:
+
+```sql
+-- Target output file size for self-optimizing (default: 128 MB)
+self-optimizing.target-size = 134217728
+
+-- Fragment threshold as a ratio of target-size (default: 8, meaning 1/8 of target-size)
+self-optimizing.fragment-ratio = 8
+```
+
+With the defaults, files smaller than 16 MB (128 MB / 8) are **fragments**, and files larger than 16 MB are **segments**. Different optimizing processes operate on fragments and segments to balance read and write amplification.
+
+## Optimizing types
+
+Self-optimizing operates in three modes depending on the input files and the goal:
+
+| Optimizing type | Input space | Output space | Input file types | Output file types |
+|----------------|-------------|--------------|------------------|-------------------|
+| **Minor** | fragment | fragment/segment | insert, eq-delete, pos-delete | insert, pos-delete |
+| **Major** | fragment, segment | segment | insert, eq-delete, pos-delete | insert, pos-delete |
+| **Full** | fragment, segment | segment | insert, eq-delete, pos-delete | insert |
+
+### Minor optimizing
+
+Minor optimizing addresses read amplification by compacting fragment files into segment files as quickly as possible. It runs more frequently when fragment files are being generated rapidly.
+
+Minor optimizing also converts from a write-friendly file format to a read-friendly file format:
+- For Mixed Format: transitions data from ChangeStore to BaseStore
+- For Iceberg Format: converts eq-delete files to pos-delete files
+
+### Major optimizing
+
+After multiple rounds of minor optimizing, the table accumulates many segment files. While segment files generally provide acceptable read performance, two problems can arise:
+
+- A significant amount of accumulated delete data on each segment file
+- Duplicate data on primary keys between different segment files
+
+These cause read performance issues not from small file counts, but from excessive redundant data that must be merged during reads. Major optimizing merges segment files to clean up this redundant data and keeps its volume at a level favorable for reading.
+
+Major optimizing is not scheduled frequently to avoid write amplification — minor optimizing has already performed multiple rounds of deduplication, so major runs can be spaced further apart.
+
+### Full optimizing
+
+Full optimizing merges all files in the target space into a single output file. It is a special case of major optimizing and produces the cleanest possible file layout.
+
+## Scheduling policies
+
+AMS determines the scheduling order for self-optimizing across tables. Two scheduling policies are available, and different optimizer groups can be configured with different policies.
+
+### Quota
+
+The `Quota` policy schedules based on resource usage. Each table's resource allocation is controlled by the `self-optimizing.quota` table property. Quotas can be specified as a decimal (percentage) or integer (fixed count):
+
+```sql
+-- Limit the table to 50% of total optimizer resources in the group
+self-optimizing.quota = 0.5;
+```
+
+```sql
+-- Limit the table to a fixed count of optimizer resource threads
+self-optimizing.quota = 10;
+```
+
+The quota scheduler calculates an **Occupation** metric for each table — the ratio of actual optimizer thread time used to the expected quota time within a sliding look-back window. Tables with lower Occupation receive higher scheduling priority, which prevents any single table from consuming more than its fair share.
+
+### Balanced
+
+The `Balanced` policy schedules based on time: tables that have not been self-optimized for longer get higher scheduling priority. This keeps self-optimizing progress at a similar level across all tables, avoiding situations where high-resource-consumption tables go unoptimized for extended periods.
+
+Use `Balanced` when there are no special resource requirements across tables in an optimizer group and you want all tables to maintain decent query efficiency.
+
+## Enabling and disabling per table
+
+Self-optimizing is enabled by default for all tables. You can disable it for a specific table:
+
+```sql
+self-optimizing.enabled = false;
+```
+
+<Info>
+  Disabling self-optimizing is appropriate for non-updatable tables such as event logs or sensor data where you prefer to use Spark's Rewrite Action directly.
+
+  For tables configured with a primary key that support CDC ingestion or streaming updates (such as database synchronization tables or dimension tables), it is strongly advisable to keep self-optimizing enabled.
+</Info>
+
+## Optimizer architecture
+
+The **Optimizer** is a resident process managed by AMS that executes self-optimizing tasks. The overall workflow is:
+
+1. AMS continuously monitors tables for file changes and plans optimizing tasks
+2. AMS schedules tasks to Optimizers for distributed execution
+3. Optimizers execute the tasks (compaction, deduplication, format conversion)
+4. AMS commits the optimizing results back to the table metadata
+
+Amoro achieves physical isolation of optimizer resources through **Optimizer Groups**. Each group can have its own container type, resource pool, and scheduling policy. Optimizer containers can be:
+
+- **Local** — runs optimizer processes on the same machine as AMS, suitable for development
+- **Flink** — submits optimizing jobs to a Flink cluster
+- **Spark** — submits optimizing jobs to a Spark cluster
+- **Kubernetes** — runs optimizer pods in a Kubernetes cluster
+
+For details on configuring optimizer groups and containers, see [Managing Optimizers](/admin-guides/managing-optimizers).

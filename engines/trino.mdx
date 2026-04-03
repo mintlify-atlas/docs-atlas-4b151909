@@ -1,0 +1,219 @@
+---
+title: "Trino"
+description: "Query and overwrite Amoro Mixed-format tables using Trino."
+---
+
+The Amoro mixed-format connector for Trino lets you query Mixed-format tables using Merge-On-Read semantics, overwrite data, and perform schema changes. Supported Trino version: **406**.
+
+## Supported operations
+
+The following table summarizes what the connector supports for Mixed-format tables.
+
+| Operation | Supported |
+| :-------- | :-------: |
+| Read (MOR) | Yes |
+| Append write | No |
+| Overwrite | Yes |
+| ALTER TABLE | Yes (unkeyed tables only) |
+
+<Note>
+DDL operations such as `ADD COLUMN`, `DROP COLUMN`, and `DROP TABLE` are only supported on unkeyed (no primary key) Mixed-format tables. Keyed tables with a primary key do not support these operations through Trino.
+</Note>
+
+## Other formats
+
+- **Iceberg format** — use the native Trino Iceberg connector. See the [Trino Iceberg documentation](https://trino.io/docs/current/connector/iceberg.html).
+- **Paimon format** — use the Paimon Trino connector. See the [Paimon Trino documentation](https://paimon.apache.org/docs/master/engines/trino/).
+
+## Installation
+
+<Steps>
+  <Step title="Build or download the plugin JAR">
+    The plugin is packaged as `amoro-mixed-trino-{version}.tar.gz`.
+
+    To build from source, you need **JDK 17** and must enable the `build-mixed-format-trino` Maven profile:
+
+    ```bash
+    ./mvnw clean package -DskipTests -Pbuild-mixed-format-trino
+    ```
+
+    The archive is produced at:
+
+    ```
+    amoro-format-mixed/amoro-mixed-trino/target/amoro-mixed-trino-{version}.tar.gz
+    ```
+
+    <Warning>
+      The `amoro-mixed-trino` module requires JDK 17 to compile and package. The rest of the Amoro build uses JDK 11. If you build the full project without `-Pbuild-mixed-format-trino`, this module is skipped by default.
+    </Warning>
+  </Step>
+
+  <Step title="Install the plugin into Trino">
+    Create the plugin directory and extract the archive into it:
+
+    ```bash
+    mkdir -p {trino_home}/plugin/amoro
+    tar -xzf amoro-mixed-trino-{version}.tar.gz -C {trino_home}/plugin/amoro
+    ```
+  </Step>
+
+  <Step title="Configure the catalog properties file">
+    Create a catalog properties file in `{trino_home}/etc/catalog/`. For example, create `{trino_home}/etc/catalog/amoro.properties`:
+
+    ```properties
+    connector.name=mixed-format
+    amoro.url=thrift://{ip}:{port}/{catalogName}
+    ```
+
+    Replace `{ip}`, `{port}`, and `{catalogName}` with the address of your AMS Thrift service and the name of your Amoro catalog.
+  </Step>
+
+  <Step title="Add the JVM export to jvm.config">
+    Add the following line to `{trino_home}/etc/jvm.config` to allow Kerberos authentication classes to load:
+
+    ```
+    --add-exports=java.security.jgss/sun.security.krb5=ALL-UNNAMED
+    ```
+  </Step>
+</Steps>
+
+## Configuration reference
+
+The following properties are available in the catalog properties file.
+
+| Property | Default | Description |
+| :------- | :------ | :---------- |
+| `connector.name` | — | Must be `mixed-format`. |
+| `amoro.url` | — | Thrift URL of the AMS catalog: `thrift://{ip}:{port}/{catalogName}`. |
+| `mixed-format.hdfs.impersonation.enabled` | `false` | When `true`, Trino proxies the querying user to Hadoop instead of using the Hadoop user configured in the catalog. |
+| `mixed-format.table-statistics-enable` | `true` | Enable table statistics for the query planner. |
+| `mixed-format.enable-split-task-by-delete-ratio` | `true` | Split tasks into smaller pieces when the delete-file ratio is above the configured threshold. |
+| `mixed-format.split-task-by-delete-ratio` | `0.05` | The delete-file ratio threshold below which task splitting is triggered. |
+
+### Hadoop impersonation
+
+By default, Trino accesses the Hadoop cluster using the Hadoop user configured during [catalog creation](/admin-guides/managing-catalogs). To use the Trino query user instead, enable impersonation:
+
+```properties
+connector.name=mixed-format
+amoro.url=thrift://{ip}:{port}/{catalogName}
+mixed-format.hdfs.impersonation.enabled=true
+```
+
+<Info>
+Hadoop impersonation requires that the configured Hadoop user has proxy permissions for the Trino querying user. See the [Hadoop Superusers documentation](https://hadoop.apache.org/docs/current/hadoop-project-dist/hadoop-common/Superusers.html#Configurations) for setup instructions.
+</Info>
+
+## Querying tables
+
+### Full table query (Merge-On-Read)
+
+The connector reads Mixed-format tables using Merge-On-Read, returning the latest consistent snapshot of the data:
+
+```sql
+SELECT * FROM "my_table"
+```
+
+### Querying the BaseStore
+
+For keyed tables (tables with a primary key), you can query the BaseStore directly. The BaseStore holds compacted data written by batch jobs or the self-optimizing process. It is fast to query but does not reflect recent streaming changes:
+
+```sql
+SELECT * FROM "my_table#base"
+```
+
+You can also qualify the table name with the database or full catalog path inside the quoted identifier:
+
+```sql
+-- With database prefix
+SELECT * FROM "my_db.my_table#base"
+
+-- With catalog and database prefix
+SELECT * FROM "my_catalog.my_db.my_table#base"
+```
+
+### Querying the ChangeStore
+
+For keyed tables, you can query the ChangeStore to inspect raw change records. The ChangeStore holds streaming writes and represents individual INSERT and DELETE events:
+
+```sql
+SELECT * FROM "my_table#change"
+```
+
+ChangeStore queries include three additional metadata columns:
+
+| Column | Description |
+| :----- | :---------- |
+| `_transaction_id` | Transaction ID allocated by AMS when the data was written. In batch mode this is per SQL execution; in streaming mode it is per checkpoint. |
+| `_file_offset` | Order in which the record was written within the same `_transaction_id` batch. |
+| `_change_action` | The type of change: `INSERT` or `DELETE`. |
+
+## Overwriting data
+
+Trino supports `INSERT INTO ... SELECT` overwrites on unkeyed Mixed-format tables via the Iceberg overwrite path. This replaces matching partitions atomically.
+
+```sql
+INSERT INTO my_table
+SELECT id, name, event_time FROM staging_table
+WHERE event_time >= DATE '2024-01-01'
+```
+
+<Warning>
+Append writes (`INSERT INTO`) are not supported on keyed Mixed-format tables through Trino. Use Flink or Spark to write to keyed tables.
+</Warning>
+
+## ALTER TABLE examples
+
+`ALTER TABLE` statements are supported on unkeyed Mixed-format tables only.
+
+<AccordionGroup>
+  <Accordion title="Add a column">
+    ```sql
+    ALTER TABLE my_table ADD COLUMN new_column VARCHAR
+    ```
+  </Accordion>
+
+  <Accordion title="Drop a column">
+    ```sql
+    ALTER TABLE my_table DROP COLUMN old_column
+    ```
+  </Accordion>
+
+  <Accordion title="Set table properties">
+    ```sql
+    ALTER TABLE my_table SET PROPERTIES write_target_file_size_bytes = 536870912
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Type mapping
+
+The following table shows how Amoro types map to Trino types.
+
+| Amoro type | Trino type |
+| :--------- | :--------- |
+| `BOOLEAN` | `BOOLEAN` |
+| `INT` | `INTEGER` |
+| `LONG` | `BIGINT` |
+| `FLOAT` | `REAL` |
+| `DOUBLE` | `DOUBLE` |
+| `DECIMAL(p,s)` | `DECIMAL(p,s)` |
+| `DATE` | `DATE` |
+| `TIME` | `TIME(6)` |
+| `TIMESTAMP` | `TIMESTAMP(6)` |
+| `TIMESTAMPTZ` | `TIMESTAMP(6) WITH TIME ZONE` |
+| `STRING` | `VARCHAR` |
+| `UUID` | `UUID` |
+| `BINARY` | `VARBINARY` |
+| `STRUCT(...)` | `ROW(...)` |
+| `LIST(e)` | `ARRAY(e)` |
+| `MAP(k,v)` | `MAP(k,v)` |
+
+## Known limitations
+
+- **No append writes to keyed tables.** `INSERT INTO` on a keyed (primary-key) table is not supported. Use Flink or Spark instead.
+- **No DROP TABLE for keyed tables.** `DROP TABLE` throws `NOT_SUPPORTED` for keyed tables.
+- **No schema changes on keyed tables.** `ADD COLUMN`, `DROP COLUMN`, and `SET PROPERTIES` are not supported for keyed tables.
+- **No MERGE / UPDATE / DELETE on keyed tables.** Row-level modifications are rejected with `Key table does not support modifying table rows`.
+- **No ANALYZE on keyed tables.** The `ANALYZE` statement is not supported for keyed tables.
+- **JDK 17 required to build.** The `amoro-mixed-trino` module must be compiled with JDK 17. Use the `-Pbuild-mixed-format-trino` Maven profile to include it in the build.
